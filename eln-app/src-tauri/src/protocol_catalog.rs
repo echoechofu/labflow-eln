@@ -1,0 +1,93 @@
+pub struct BuiltinProtocol {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    pub accent: &'static str,
+    pub schema_version: i64,
+    pub schema: &'static str,
+}
+
+pub fn builtins() -> [BuiltinProtocol; 10] {
+    [
+        BuiltinProtocol {
+            id: "pro-cell-thaw",
+            name: "细胞复苏",
+            category: "细胞培养",
+            accent: "#167c80",
+            schema_version: 2,
+            schema: r#"{"schemaVersion":2,"blocks":["37℃ 水浴复苏","5× 稀释并 1000 rpm 离心 5 min","重悬后置入 CO₂ 培养箱"],"fields":[{"key":"cell_name","label":"细胞名称","kind":"text","required":true}],"template":"日期：{{date}}\n细胞名称：{{cell_name}}\n\n1. 取出液氮中的 {{cell_name}} 冻存管，用薄膜手套包裹，于37℃水浴锅中摇动，直至培养基融化成可流动液体状。\n\n2. 超净台用紫外照射至少15min后，打开冻存管，吸出细胞悬液装入15ml离心管中，并以培养基5×稀释，离心1000rpm，5min。\n\n3. 弃去离心后的培养基上清，取1～1.5 ml 到离心管中，轻轻吹打使细胞重悬。吸出细胞悬液于培养瓶或培养皿中，加入培养基。放CO2培养箱中进行培养。","execution":{"eventType":"thaw","inputTypes":[],"outputType":"CELL","outputMode":"one"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-cell-passage",
+            name: "细胞传代",
+            category: "细胞培养",
+            accent: "#167c80",
+            schema_version: 3,
+            schema: r#"{"schemaVersion":3,"blocks":["选择上一代细胞","选择贴壁或悬浮传代","按完整 SOP 处理并记录输出"],"fields":[{"key":"input_sample","label":"上一步 Cell","kind":"samples"},{"key":"cell_name","label":"新细胞名称","kind":"text"},{"key":"culture_mode","label":"培养方式","kind":"select","required":true,"options":["贴壁","悬浮"]},{"key":"output_count","label":"输出数量","kind":"number","required":true}],"templateSelector":"culture_mode","templateVariants":{"贴壁":"日期：{{date}}\n培养方式：{{culture_mode}}\n\n1. 吸除或倒掉瓶内旧培养液。\n2. PBS洗2～3次。\n3. 加入适量胰蛋白酶，轻摇使消化液流遍细胞表面。\n4. 放入培养箱消化2～5 min。\n5. 显微镜下观察，待胞质回缩、细胞间隙增大后立即终止消化，可拍打培养皿或培养瓶底部。\n6. 吸除或倒掉胰酶，加少许含血清培养液终止消化；反复轻柔吹打瓶壁细胞，从一边到底部另一边，确保细胞全部脱壁形成悬液。\n7. 计数，分别接种新的培养瓶。","悬浮":"日期：{{date}}\n培养方式：{{culture_mode}}\n\n悬浮细胞可采用离心收集后传代或直接传代。\n\n离心法：\n1. 将细胞连同培养液转移至15 ml离心管。\n2. 1000 rpm，离心5 min。\n3. 弃上清，加入新培养液吹打成细胞悬液。\n4. 计数，分别接种新的培养瓶。\n\n直接传代法：\n待悬浮细胞慢慢沉淀到瓶底，吸掉1/2～2/3上清，用吸管吹打成细胞悬液后传代。"},"execution":{"eventType":"passage","inputTypes":["CELL"],"outputType":"CELL","outputMode":"count","consumptionPolicy":"consume"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-cell-plating",
+            name: "细胞铺板",
+            category: "细胞培养",
+            accent: "#167c80",
+            schema_version: 4,
+            schema: r#"{"schemaVersion":4,"blocks":["选择细胞","选择器皿类型与孔板规格","完成铺板"],"fields":[{"key":"input_sample","label":"输入 Cell","kind":"samples"},{"key":"cell_name","label":"新细胞名称（未选择输入时）","kind":"text"},{"key":"container_type","label":"器皿类型","kind":"select","required":true,"options":["孔板","培养皿"]},{"key":"plate_format","label":"孔板规格","kind":"select","options":["6孔板","12孔板","24孔板","48孔板","96孔板","384孔板"],"visibleWhen":{"key":"container_type","value":"孔板"}}],"template":"日期：{{date}}\n器皿类型：{{container_type}}\n孔板规格：{{plate_format}}\n\n1. 选择待铺板细胞。\n2. 将细胞接种到选定的器皿中。","execution":{"eventType":"plating","inputTypes":["CELL"],"outputMode":"plate_or_dish"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-cell-treatment",
+            name: "细胞加刺激",
+            category: "细胞培养",
+            accent: "#167c80",
+            schema_version: 3,
+            schema: r#"{"schemaVersion":3,"blocks":["选择孔板/培养皿/孔","设置孔板刺激分组","核对孔数并生成样本"],"fields":[{"key":"input_sample","label":"输入样本","kind":"samples"},{"key":"new_object_type","label":"新对象类型（未选择输入时）","kind":"select","options":["孔板","培养皿","孔"]},{"key":"new_object_name","label":"新对象名称","kind":"text"},{"key":"new_plate_format","label":"新孔板规格","kind":"select","options":["6孔板","12孔板","24孔板","48孔板","96孔板","384孔板"],"visibleWhen":{"key":"new_object_type","value":"孔板"}},{"key":"treatment_groups","label":"孔板刺激分组","kind":"plate_layout","visibleForInputTypes":["PLATE"]},{"key":"treatment_type","label":"刺激类型","kind":"text","visibleForInputTypes":["DISH","WELL"]}],"template":"日期：{{date}}\n\n孔板刺激布局：\n{{plate_layout_summary}}\n\n单对象刺激：{{treatment_type}}\n\n1. 核对待处理对象和孔板规格。\n2. 按分组完成刺激并记录各孔条件。","execution":{"eventType":"treatment","inputTypes":["PLATE","DISH","WELL"],"outputMode":"plate_wells"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-rna",
+            name: "RNA Extraction — Trizol",
+            category: "分子生物学",
+            accent: "#6957e8",
+            schema_version: 2,
+            schema: r#"{"schemaVersion":2,"blocks":["选择上级 Task 输出","Trizol 裂解","相分离","RNA 沉淀与乙醇洗涤","复溶"],"fields":[{"key":"resuspension_volume","label":"RNase-free 水复溶体积（μL）","kind":"number","required":true,"defaultValue":"20"},{"key":"storage","label":"RNA 后续处理","kind":"select","required":true,"options":["立即逆转录","-80℃ 保存"]}],"template":"日期：{{date}}\n输入样本：{{input_sample_summary}}\nRNase-free 水复溶体积：{{resuspension_volume}} μL\n后续处理：{{storage}}\n\n1. 去除培养基，PBS 洗1遍，加入1 ml Trizol裂解液，反复吹打、刮擦，将裂解液转入无RNase EP管。\n2. 加入0.2 ml氯仿，颠倒摇匀，冰上静置5分钟，12000 g离心10分钟。\n3. 取上层水相至新无RNase EP管，加入等体积异丙醇，静置10分钟，12000 g离心10分钟。\n4. 去除上清，加入1 ml预冷75%乙醇轻振，7500 g离心5分钟。\n5. 小心除去上清，乙醇干燥后加入 {{resuspension_volume}} μL RNase-free水，静置5分钟使RNA溶解。","execution":{"eventType":"rna_extraction","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CELL","WELL","DISH"],"outputType":"RNA","outputMode":"per_input","consumptionPolicy":"consume"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-rt",
+            name: "Reverse Transcription — PrimeScript",
+            category: "分子生物学",
+            accent: "#6957e8",
+            schema_version: 2,
+            schema: r#"{"schemaVersion":2,"blocks":["选择 RNA","去除基因组 DNA","逆转录反应","保存 cDNA"],"fields":[{"key":"rna_amount","label":"每个反应 RNA 用量（μg）","kind":"number","required":true,"defaultValue":"1.0"},{"key":"extra_reactions","label":"额外反应数","kind":"number","required":true,"defaultValue":"2"}],"template":"日期：{{date}}\n输入 RNA：{{input_sample_summary}}\n每个反应 RNA：{{rna_amount}} μg；额外反应：{{extra_reactions}}。\n\n1. gDNA去除：5×gDNA Eraser Buffer 2.0 μL、gDNA Eraser 1.0 μL、Total RNA {{rna_amount}} μg，以RNase Free dH2O补至10 μL；42℃ 2 min，4℃保持。\n2. 逆转录：步骤1反应液10 μL、PrimeScript RT Enzyme Mix I 1 μL、RT Primer Mix 1 μL、5×PrimeScript Buffer 2 4 μL、RNase Free dH2O 4 μL。\n3. 37℃ 15 min，85℃ 5 sec，4℃保持。产物直接用于qRT-PCR，或-20℃短期、-80℃长期保存。","execution":{"eventType":"reverse_transcription","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["RNA"],"outputType":"CDNA","outputMode":"per_input","consumptionPolicy":"aliquot"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-qpcr",
+            name: "SYBR Green qPCR",
+            category: "分子生物学",
+            accent: "#6957e8",
+            schema_version: 2,
+            schema: r#"{"schemaVersion":2,"blocks":["选择 cDNA","反应体系","扩增程序","Ct 数据"],"fields":[{"key":"target_genes","label":"目的基因（逗号分隔）","kind":"text","required":true},{"key":"reference_gene","label":"内参基因","kind":"text","required":true,"defaultValue":"GAPDH"},{"key":"technical_replicates","label":"技术重复数","kind":"number","required":true,"defaultValue":"3"}],"template":"日期：{{date}}\n输入 cDNA：{{input_sample_summary}}\n目的基因：{{target_genes}}；内参：{{reference_gene}}；技术重复：{{technical_replicates}}。\n\n每个25 μL反应：SYBR Premix Ex TaqII 12.5 μL，正向引物1.0 μL，反向引物1.0 μL，cDNA 2.0 μL，RNase Free dH2O 8.5 μL。\n程序：95℃ 30 sec；40个循环（95℃ 5 sec，60℃ 30–60 sec）；Dissociation。\nCt原始数据作为Result保存，不作为Sample。","execution":{"eventType":"qpcr","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CDNA"],"outputMode":"none","resultTypes":["qpcr_ct"],"consumptionPolicy":"aliquot"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-wb",
+            name: "Western Blot",
+            category: "分子生物学",
+            accent: "#c4573b",
+            schema_version: 1,
+            schema: r#"{"schemaVersion":1,"blocks":["样品准备","配胶","电泳与转膜","封闭与抗体孵育","显影"],"fields":[{"key":"target_proteins","label":"目的蛋白（逗号分隔）","kind":"text","required":true},{"key":"gel_percentage","label":"分离胶浓度（%）","kind":"number","required":true,"defaultValue":"10"},{"key":"primary_antibody","label":"一抗及稀释比例","kind":"text","required":true},{"key":"secondary_antibody","label":"二抗及稀释比例","kind":"text","required":true},{"key":"exposure_time","label":"曝光时间","kind":"text"}],"template":"日期：{{date}}\n输入样本：{{input_sample_summary}}\n目的蛋白：{{target_proteins}}\n\n1. 去除培养基，PBS轻柔漂洗3次。RIPA与PMSF按100:1配制，每孔加入预冷裂解液，冰上裂解10分钟，刮取并转入1.5 mL离心管，12000 g、4℃离心5分钟。G250法定量，调平浓度，加入5×SDS-PAGE上样缓冲液，100℃煮样10分钟。\n2. 配制 {{gel_percentage}}% 分离胶及浓缩胶。\n3. 80 V电泳至分离胶后调至120 V；PVDF膜甲醇活化，100 V湿转1小时。\n4. 封闭后孵育一抗 {{primary_antibody}}，PBST洗涤；孵育二抗 {{secondary_antibody}}，再次洗涤。\n5. ECL显影，曝光时间：{{exposure_time}}。显影图像作为Result/Attachment保存。","execution":{"eventType":"western_blot","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CELL","WELL","DISH"],"outputType":"PROTEIN","outputMode":"per_input","resultTypes":["western_blot_image"],"consumptionPolicy":"consume"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-supernatant",
+            name: "培养上清收集",
+            category: "分子生物学",
+            accent: "#2c77b8",
+            schema_version: 1,
+            schema: r#"{"schemaVersion":1,"blocks":["选择培养对象","收集上清","澄清离心","分装保存"],"fields":[{"key":"collection_time","label":"收集时间点","kind":"text","required":true},{"key":"collection_volume","label":"每个样本收集体积（μL）","kind":"number","required":true},{"key":"storage","label":"保存方式","kind":"select","required":true,"options":["立即检测","-80℃ 保存"]}],"template":"日期：{{date}}\n输入培养对象：{{input_sample_summary}}\n收集时间点：{{collection_time}}；每个样本体积：{{collection_volume}} μL；保存：{{storage}}。\n\n1. 收集各培养对象的细胞培养上清。\n2. 300 g离心10分钟，去除沉淀物。\n3. 上清可立即检测，或分装后置于-80℃保存。","execution":{"eventType":"supernatant_collection","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CELL","WELL","DISH"],"outputType":"SUP","outputMode":"per_input","consumptionPolicy":"non_destructive"}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-elisa",
+            name: "ELISA — 细胞因子",
+            category: "分子生物学",
+            accent: "#2c77b8",
+            schema_version: 1,
+            schema: r#"{"schemaVersion":1,"blocks":["选择培养上清","标准曲线","抗体孵育与洗板","显色读数"],"fields":[{"key":"analytes","label":"检测因子（逗号分隔）","kind":"text","required":true},{"key":"sample_dilution","label":"样本稀释倍数","kind":"number","required":true,"defaultValue":"1"},{"key":"reference_wavelength","label":"参考波长","kind":"select","required":true,"options":["570 nm","630 nm"]}],"template":"日期：{{date}}\n输入上清：{{input_sample_summary}}\n检测因子：{{analytes}}；样本稀释倍数：{{sample_dilution}}；参考波长：{{reference_wavelength}}。\n\n1. 试剂与样本平衡至室温，按试剂盒要求配制洗液、检测缓冲液和检测抗体。\n2. 配制标准曲线，样本按设定倍数稀释。\n3. 加样及检测抗体，室温振荡孵育1.5小时；洗板6次。\n4. 加入酶结合物孵育30分钟并洗板；加入TMB显色5–30分钟，终止反应。\n5. 读取450 nm及 {{reference_wavelength}} OD。OD与浓度数据作为Result保存，不作为Sample。","execution":{"eventType":"elisa","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["SUP"],"outputMode":"none","resultTypes":["elisa_od"],"consumptionPolicy":"aliquot"}}"#,
+        },
+    ]
+}

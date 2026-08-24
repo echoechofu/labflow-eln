@@ -1,0 +1,41 @@
+{
+  "name": "eln-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run dev:web",
+    "dev:web": "tsx server.ts & vite",
+    "vite:dev": "vite --host 127.0.0.1",
+    "db": "tsx server.ts",
+    "build": "npm run build:web",
+    "build:web": "tsc -b && tsc -p tsconfig.server.json && vite build",
+    "lint": "oxlint --ignore-pattern 'src-tauri/target/**'",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build --bundles app",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "oxlint": "^1.75.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.12",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
+  }
+}

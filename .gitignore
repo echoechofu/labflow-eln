@@ -1,0 +1,5 @@
+# This repository archives the LabFlow application only.
+/*
+!/.gitignore
+!/eln-app/
+!/eln-app/**
