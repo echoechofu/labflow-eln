@@ -92,11 +92,30 @@ CREATE TABLE IF NOT EXISTS assay_raw_measurements (
   raw_row_json TEXT NOT NULL,
   UNIQUE(import_id, well_position, metric_key)
 );
+CREATE TABLE IF NOT EXISTS qpcr_delta_ct_analyses (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL REFERENCES records(id),
+  name TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS qpcr_delta_delta_ct_analyses (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL REFERENCES records(id),
+  delta_ct_analysis_id TEXT NOT NULL REFERENCES qpcr_delta_ct_analyses(id),
+  name TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS assay_items_record_index ON assay_items(record_id);
 CREATE INDEX IF NOT EXISTS assay_plates_record_index ON assay_plates(record_id);
 CREATE INDEX IF NOT EXISTS assay_mappings_plate_index ON assay_well_mappings(plate_id);
 CREATE INDEX IF NOT EXISTS assay_raw_imports_plate_index ON assay_raw_imports(plate_id);
 CREATE INDEX IF NOT EXISTS assay_raw_measurements_import_index ON assay_raw_measurements(import_id);
+CREATE INDEX IF NOT EXISTS qpcr_delta_ct_record_index ON qpcr_delta_ct_analyses(record_id);
+CREATE INDEX IF NOT EXISTS qpcr_delta_delta_ct_record_index ON qpcr_delta_delta_ct_analyses(record_id);
 CREATE TABLE IF NOT EXISTS export_manifests (
   id TEXT PRIMARY KEY,
   date_from TEXT NOT NULL,

@@ -41,6 +41,6 @@ SQLite 保存结构化领域数据及文件的**相对** locator（如 `files/ex
 2. Task 编辑：`save_task` 在 transaction 内校验并保存 Task/Experiment/Task relation。
 3. Record 启动：`start_task_record` 调用 Protocol execution，在一个 transaction 内写入 Record、过程、Sample lineage、usage 和 Result。
 4. 导出：创建 manifest 时从 SQLite 组装已保存的 Record snapshot、正文及关联数据，生成 SHA-256，并将 JSON 写到 `files/exports/`，随后在 SQLite 写 export 元数据。
-5. 终末检测：Record Setup 在创建事务中保存 Assay Items；Plate Mapping 与 raw import 使用 focused Tauri commands 独立写入。raw 原文件进入 `files/<attachment-id>/`，解析值进入 SQLite，读取 workspace 时按 plate/well 生成 join dataset。
+5. 终末检测：Record Setup 在创建事务中保存 Assay Items；Plate Mapping 与 raw import 使用 focused Tauri commands 独立写入。raw 原文件进入 `files/<attachment-id>/`，解析值进入 SQLite，读取 workspace 时按 plate/well 生成 join dataset。qPCR 可继续建立 ΔCt/ΔΔCt 快照；保存时在同一 transaction 内插入分析行、向 Record 追加冻结文字并记录变更。ELISA/CCK-8 当前停在通用 join dataset。
 
 旧的全量 `save_store` command 仍存在以兼容早期 store 形式，但一旦已有 `process_events` 就拒绝执行，以免覆盖 lineage；当前功能使用 focused commands。

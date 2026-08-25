@@ -13,7 +13,7 @@ Protocol 由 `protocols` 与 `protocol_versions` 表表达。每个内置 Protoc
 
 创建 Record 时，执行器校验必填字段，按任务日期渲染模板，将 schema snapshot 和渲染后的正文写入 Record；随后按 execution rule 创建 ProcessEvent、Sample usage、输出 Sample 或 Result。
 
-qPCR、ELISA、CCK-8 的 schema 还包含当前已实现的 `terminalAssay` 描述：检测项目 UI 名称、raw metric 和允许板型。Record 创建时保存 Assay Items；随后共用独立 Plate Mapping/Raw Data 功能层。本阶段这三类 Protocol 不在 Setup 时创建 pending Result，也不执行计算。
+qPCR、ELISA、CCK-8 的 schema 还包含当前已实现的 `terminalAssay` 描述：检测项目 UI 名称、raw metric 和允许板型。Record 创建时保存 Assay Items；随后共用独立 Plate Mapping/Raw Data 功能层。这三类 Protocol 不在 Setup 时创建 pending Result。当前只有 qPCR 在共用 join dataset 之后实现了专属 ΔCt/ΔΔCt Analysis；ELISA、CCK-8 尚无计算层。
 
 ## 当前专属逻辑与通用边界
 

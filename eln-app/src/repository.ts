@@ -236,6 +236,66 @@ export interface AssayWorkspace {
     numericValue?: number;
     textValue: string;
   }[];
+  deltaCtAnalyses: QpcrDeltaCtAnalysis[];
+  deltaDeltaCtAnalyses: QpcrDeltaDeltaCtAnalysis[];
+}
+
+export interface QpcrDeltaCtSampleResult {
+  sampleId: string;
+  sampleCode: string;
+  targetMeanCq: number;
+  referenceMeanCq: number;
+  targetReplicateCount: number;
+  referenceReplicateCount: number;
+  deltaCt: number;
+}
+
+export interface QpcrDeltaCtAnalysis {
+  id: string;
+  recordId: string;
+  name: string;
+  config: {
+    targetItemIds: string[];
+    referenceItemIds: string[];
+    includedMeasurementIds: string[];
+    qcNotes: Record<string, string>;
+  };
+  result: {
+    combinations: {
+      targetItemId: string;
+      referenceItemId: string;
+      samples: QpcrDeltaCtSampleResult[];
+    }[];
+  };
+  createdAt: string;
+}
+
+export interface QpcrDeltaDeltaCtAnalysis {
+  id: string;
+  recordId: string;
+  deltaCtAnalysisId: string;
+  name: string;
+  config: {
+    referenceItemId: string;
+    controlMode: "shared" | "matched";
+    sampleGroups: Record<string, string>;
+    sharedControlGroup: string;
+    controlRelations: Record<string, string>;
+  };
+  result: {
+    combinations: {
+      targetItemId: string;
+      referenceItemId: string;
+      samples: (QpcrDeltaCtSampleResult & {
+        group: string;
+        controlGroup: string;
+        controlMeanDeltaCt: number;
+        deltaDeltaCt: number;
+        relativeExpression: number;
+      })[];
+    }[];
+  };
+  createdAt: string;
 }
 
 export async function getAssayWorkspace(recordId: string) {
@@ -252,6 +312,11 @@ export async function createAssayPlate(request: {
 }) {
   desktopOnly();
   await invoke("create_assay_plate", { request });
+}
+
+export async function deleteEmptyAssayPlate(plateId: string) {
+  desktopOnly();
+  await invoke("delete_empty_assay_plate", { plateId });
 }
 
 export async function replaceAssayPlateMappings(
@@ -296,6 +361,41 @@ export async function uploadAssayRawFile(
 ) {
   desktopOnly();
   return invoke<RawUploadResult>("upload_assay_raw_file", { request, bytes });
+}
+
+export async function createQpcrDeltaCtAnalysis(request: {
+  id: string;
+  recordId: string;
+  name: string;
+  targetItemIds: string[];
+  referenceItemIds: string[];
+  includedMeasurementIds: string[];
+  qcNotes: Record<string, string>;
+  createdAt: string;
+}) {
+  desktopOnly();
+  return invoke<QpcrDeltaCtAnalysis>("create_qpcr_delta_ct_analysis", {
+    request,
+  });
+}
+
+export async function createQpcrDeltaDeltaCtAnalysis(request: {
+  id: string;
+  recordId: string;
+  deltaCtAnalysisId: string;
+  name: string;
+  referenceItemId: string;
+  controlMode: "shared" | "matched";
+  sampleGroups: Record<string, string>;
+  sharedControlGroup: string;
+  controlRelations: Record<string, string>;
+  createdAt: string;
+}) {
+  desktopOnly();
+  return invoke<QpcrDeltaDeltaCtAnalysis>(
+    "create_qpcr_delta_delta_ct_analysis",
+    { request },
+  );
 }
 
 export interface ExportManifestResult {

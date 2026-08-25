@@ -1398,6 +1398,12 @@ function RecordsPage({
                       {item.renderedContent || item.notes || "暂无正文。"}
                     </p>
                   </section>
+                  {item.analysisSections?.map((analysis) => (
+                    <section key={analysis.id}>
+                      <h4>{analysis.title}</h4>
+                      <p className="export-body">{analysis.text}</p>
+                    </section>
+                  ))}
                   <section className="export-samples">
                     <h4>样本</h4>
                     <p>
@@ -1509,6 +1515,22 @@ function RecordsPage({
                     {record.renderedContent || record.notes || "暂无正文。"}
                   </p>
                 </section>
+                {!!record.analysisSections?.length && (
+                  <section className="record-section record-analysis-sections">
+                    <div className="section-title">
+                      <div>
+                        <i>03</i>
+                        <h2>qPCR 分析结果</h2>
+                      </div>
+                    </div>
+                    {record.analysisSections.map((section) => (
+                      <article key={section.id}>
+                        <h3>{section.title}</h3>
+                        <p style={{ whiteSpace: "pre-wrap" }}>{section.text}</p>
+                      </article>
+                    ))}
+                  </section>
+                )}
                 {recordProtocol?.terminalAssay && (
                   <TerminalAssayWorkspace
                     record={record}

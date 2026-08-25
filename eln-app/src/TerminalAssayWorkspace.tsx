@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import type { RecordItem, Sample, TerminalAssayDefinition } from "./domain";
 import {
   createAssayPlate,
+  deleteEmptyAssayPlate,
   getAssayWorkspace,
   replaceAssayPlateMappings,
   uid,
   uploadAssayRawFile,
   type AssayWorkspace,
 } from "./repository";
+import QpcrAnalysisWorkspace from "./QpcrAnalysisWorkspace";
 import "./assay-mapping.css";
 
 type Props = {
@@ -108,6 +110,8 @@ export default function TerminalAssayWorkspace({
   const [measurementColumn, setMeasurementColumn] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [step, setStep] = useState(1);
 
   const refresh = async (preferredPlate?: string) => {
     const next = await getAssayWorkspace(record.id);
@@ -219,6 +223,21 @@ export default function TerminalAssayWorkspace({
     }
   };
 
+  const deletePlate = async () => {
+    if (!selectedPlate) return;
+    if (!window.confirm(`删除空白板“${selectedPlate.name}”？`)) return;
+    setBusy(true);
+    try {
+      await deleteEmptyAssayPlate(selectedPlate.id);
+      await refresh();
+      setError("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const chooseFile = async (next?: File) => {
     setFile(next);
     setError("");
@@ -226,7 +245,9 @@ export default function TerminalAssayWorkspace({
       setHeaders([]);
       return;
     }
-    const parsedHeaders = parseHeader(await next.text());
+    const parsedHeaders = next.name.toLowerCase().endsWith(".xlsx")
+      ? ["Well", definition.metricLabel]
+      : parseHeader(await next.text());
     setHeaders(parsedHeaders);
     const automaticWell =
       parsedHeaders.find((header) =>
@@ -298,9 +319,44 @@ export default function TerminalAssayWorkspace({
   const plateImports = workspace.imports.filter(
     (item) => item.plateId === selectedPlateId,
   );
+  const isQpcr = definition.metricKey.toLowerCase() === "cq";
+  const selectedPlateIsEmpty =
+    !!selectedPlate &&
+    workspace.mappings.every(
+      (mapping) => mapping.plateId !== selectedPlate.id,
+    ) &&
+    workspace.imports.every((item) => item.plateId !== selectedPlate.id) &&
+    Object.keys(draft).length === 0;
+  const hasAnalysisProgress =
+    workspace.plates.length > 0 ||
+    workspace.imports.length > 0 ||
+    workspace.deltaCtAnalyses.length > 0 ||
+    workspace.deltaDeltaCtAnalyses.length > 0;
+
+  if (isQpcr && !analysisOpen)
+    return (
+      <section className="terminal-assay assay-launcher">
+        <div>
+          <h2>qPCR 数据分析</h2>
+          <p>
+            Plate Mapping、Raw Cq、Join Dataset 与 ΔCt / ΔΔCt
+            在独立分析工作区中按步骤完成。
+          </p>
+        </div>
+        <button
+          className="primary"
+          onClick={() => {
+            setStep(1);
+            setAnalysisOpen(true);
+          }}
+        >
+          {hasAnalysisProgress ? "继续分析" : "开始分析"}
+        </button>
+      </section>
+    );
 
   return (
-    <section className="terminal-assay">
+    <section className={`terminal-assay ${isQpcr ? "analysis-open" : ""}`}>
       <div className="terminal-assay-title">
         <div>
           <h2>Plate Mapping & Raw Data</h2>
@@ -309,36 +365,64 @@ export default function TerminalAssayWorkspace({
             ，不会创建新 Sample。
           </p>
         </div>
-        <span>暂不计算</span>
+        {isQpcr ? (
+          <button
+            className="secondary assay-exit"
+            onClick={() => setAnalysisOpen(false)}
+          >
+            退出分析
+          </button>
+        ) : (
+          <span>Mapping + Raw</span>
+        )}
       </div>
 
-      <div className="assay-create-plate">
-        <input
-          aria-label="板名称"
-          value={plateName}
-          onChange={(event) => setPlateName(event.target.value)}
-        />
-        <select
-          aria-label="板型"
-          value={plateModel}
-          onChange={(event) => setPlateModel(event.target.value)}
-        >
-          {definition.plateModels.map((model) => (
-            <option value={model} key={model}>
-              {model} 孔板
-            </option>
-          ))}
-        </select>
-        <button
-          className="secondary"
-          disabled={busy}
-          onClick={() => void createPlate()}
-        >
-          新建板
-        </button>
-      </div>
+      {isQpcr && (
+        <nav className="assay-step-nav" aria-label="qPCR 分析步骤">
+          {["Plate Mapping", "Raw Result", "Mapped Join", "qPCR Analysis"].map(
+            (label, index) => (
+              <button
+                className={step === index + 1 ? "active" : ""}
+                onClick={() => setStep(index + 1)}
+                key={label}
+              >
+                <b>{index + 1}</b>
+                {label}
+              </button>
+            ),
+          )}
+        </nav>
+      )}
 
-      {workspace.plates.length > 0 && (
+      {(!isQpcr || step === 1) && (
+        <div className="assay-create-plate">
+          <input
+            aria-label="板名称"
+            value={plateName}
+            onChange={(event) => setPlateName(event.target.value)}
+          />
+          <select
+            aria-label="板型"
+            value={plateModel}
+            onChange={(event) => setPlateModel(event.target.value)}
+          >
+            {definition.plateModels.map((model) => (
+              <option value={model} key={model}>
+                {model} 孔板
+              </option>
+            ))}
+          </select>
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() => void createPlate()}
+          >
+            新建板
+          </button>
+        </div>
+      )}
+
+      {(!isQpcr || step <= 3) && workspace.plates.length > 0 && (
         <div className="assay-plate-tabs">
           {workspace.plates.map((plate) => (
             <button
@@ -352,205 +436,256 @@ export default function TerminalAssayWorkspace({
               {plate.name} · {plate.plateModel}孔
             </button>
           ))}
+          {selectedPlate && (!isQpcr || step === 1) && (
+            <button
+              className="assay-delete-plate"
+              disabled={busy || !selectedPlateIsEmpty}
+              title={
+                selectedPlateIsEmpty
+                  ? "删除当前空白板"
+                  : "只有没有 Mapping 和 Raw Result 的空白板可以删除"
+              }
+              onClick={() => void deletePlate()}
+            >
+              删除空白板
+            </button>
+          )}
         </div>
       )}
 
       {selectedPlate && (
         <>
-          <section className="assay-mapping-layer">
-            <header>
-              <div>
-                <b>1. Plate Mapping</b>
-                <small>选择组合后点击孔位；再次点击相同组合可清空。</small>
-              </div>
-              <select
-                aria-label="Sample 与检测项目组合"
-                value={selectedOption}
-                onChange={(event) => setSelectedOption(event.target.value)}
-              >
-                <option value="">选择 Sample × {definition.itemLabel}</option>
-                {options.map((option, index) => (
-                  <option
-                    value={index}
-                    key={`${option.sampleId}-${option.assayItemId}`}
-                  >
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </header>
-            <div className="assay-plate-scroll">
-              <div
-                className="assay-plate-grid"
-                style={{
-                  gridTemplateColumns: `repeat(${dimensions(selectedPlate.plateModel)?.[1] || 1}, minmax(64px, 1fr))`,
-                }}
-              >
-                {wellPositions(selectedPlate.plateModel).map((well) => {
-                  const mapping = draft[well];
-                  const label = labelFor(mapping);
-                  return (
-                    <button
-                      className={mapping ? "mapped" : ""}
-                      title={label || well}
-                      onClick={() => {
-                        if (!selectedAssignment)
-                          return setError(
-                            "请先选择一个 Sample × 检测项目组合。",
-                          );
-                        setDraft((current) => {
-                          const next = { ...current };
-                          if (
-                            mapping?.sampleId === selectedAssignment.sampleId &&
-                            mapping?.assayItemId ===
-                              selectedAssignment.assayItemId
-                          )
-                            delete next[well];
-                          else
-                            next[well] = {
-                              sampleId: selectedAssignment.sampleId,
-                              assayItemId: selectedAssignment.assayItemId,
-                            };
-                          return next;
-                        });
-                        setError("");
-                      }}
-                      key={well}
+          {(!isQpcr || step === 1) && (
+            <section className="assay-mapping-layer">
+              <header>
+                <div>
+                  <b>1. Plate Mapping</b>
+                  <small>选择组合后点击孔位；再次点击相同组合可清空。</small>
+                </div>
+                <select
+                  aria-label="Sample 与检测项目组合"
+                  value={selectedOption}
+                  onChange={(event) => setSelectedOption(event.target.value)}
+                >
+                  <option value="">选择 Sample × {definition.itemLabel}</option>
+                  {options.map((option, index) => (
+                    <option
+                      value={index}
+                      key={`${option.sampleId}-${option.assayItemId}`}
                     >
-                      <b>{well}</b>
-                      <span>{label || "未映射"}</span>
-                    </button>
-                  );
-                })}
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </header>
+              <div className="assay-plate-scroll">
+                <div
+                  className="assay-plate-grid"
+                  style={{
+                    gridTemplateColumns: `repeat(${dimensions(selectedPlate.plateModel)?.[1] || 1}, minmax(64px, 1fr))`,
+                  }}
+                >
+                  {wellPositions(selectedPlate.plateModel).map((well) => {
+                    const mapping = draft[well];
+                    const label = labelFor(mapping);
+                    return (
+                      <button
+                        className={mapping ? "mapped" : ""}
+                        title={label || well}
+                        onClick={() => {
+                          if (!selectedAssignment)
+                            return setError(
+                              "请先选择一个 Sample × 检测项目组合。",
+                            );
+                          setDraft((current) => {
+                            const next = { ...current };
+                            if (
+                              mapping?.sampleId ===
+                                selectedAssignment.sampleId &&
+                              mapping?.assayItemId ===
+                                selectedAssignment.assayItemId
+                            )
+                              delete next[well];
+                            else
+                              next[well] = {
+                                sampleId: selectedAssignment.sampleId,
+                                assayItemId: selectedAssignment.assayItemId,
+                              };
+                            return next;
+                          });
+                          setError("");
+                        }}
+                        key={well}
+                      >
+                        <b>{well}</b>
+                        <span>{label || "未映射"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-            <div className="assay-mapping-summary">
-              <div>
-                {Object.entries(replicateCounts).map(([label, count]) => (
-                  <span key={label}>
-                    {label} · {count}孔
-                  </span>
-                ))}
-                {Object.keys(replicateCounts).length === 0 && (
-                  <span>尚未分配孔位</span>
+              <div className="assay-mapping-summary">
+                <div>
+                  {Object.entries(replicateCounts).map(([label, count]) => (
+                    <span key={label}>
+                      {label} · {count}孔
+                    </span>
+                  ))}
+                  {Object.keys(replicateCounts).length === 0 && (
+                    <span>尚未分配孔位</span>
+                  )}
+                </div>
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => void saveMapping()}
+                >
+                  保存 Mapping
+                </button>
+              </div>
+            </section>
+          )}
+
+          {(!isQpcr || step === 2) && (
+            <section className="assay-raw-layer">
+              <header>
+                <div>
+                  <b>2. Raw Result Attachment</b>
+                  <small>
+                    支持 UTF-8 CSV / TSV；qPCR 也支持 CFX 导出的
+                    XLSX。原文件与解析值一并保存在用户数据目录。
+                  </small>
+                </div>
+              </header>
+              <div className="assay-upload-row">
+                <input
+                  aria-label="选择 Raw Result 文件"
+                  type="file"
+                  accept=".csv,.tsv,.txt,.xlsx,text/csv,text/tab-separated-values,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(event) => void chooseFile(event.target.files?.[0])}
+                />
+                {headers.length > 0 && (
+                  <>
+                    <label>
+                      孔位列
+                      <select
+                        value={wellColumn}
+                        onChange={(event) => setWellColumn(event.target.value)}
+                      >
+                        {headers.map((header) => (
+                          <option key={header}>{header}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      {definition.metricLabel} 列
+                      <select
+                        value={measurementColumn}
+                        onChange={(event) =>
+                          setMeasurementColumn(event.target.value)
+                        }
+                      >
+                        {headers.map((header) => (
+                          <option key={header}>{header}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className="primary"
+                      disabled={busy}
+                      onClick={() => void upload()}
+                    >
+                      保存并解析
+                    </button>
+                  </>
                 )}
               </div>
-              <button
-                className="primary"
-                disabled={busy}
-                onClick={() => void saveMapping()}
-              >
-                保存 Mapping
-              </button>
-            </div>
-          </section>
+              {plateImports.map((item) => (
+                <p className="assay-import" key={item.id}>
+                  <b>{item.fileName}</b> · {item.measurementCount} 条{" "}
+                  {item.metricKey} · SHA-256 {item.contentSha256.slice(0, 12)}…
+                </p>
+              ))}
+            </section>
+          )}
 
-          <section className="assay-raw-layer">
-            <header>
-              <div>
-                <b>2. Raw Result Attachment</b>
-                <small>
-                  支持 UTF-8 CSV / TSV；原文件与解析值一并保存在用户数据目录。
-                </small>
-              </div>
-            </header>
-            <div className="assay-upload-row">
-              <input
-                aria-label="选择 Raw Result 文件"
-                type="file"
-                accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
-                onChange={(event) => void chooseFile(event.target.files?.[0])}
-              />
-              {headers.length > 0 && (
-                <>
-                  <label>
-                    孔位列
-                    <select
-                      value={wellColumn}
-                      onChange={(event) => setWellColumn(event.target.value)}
-                    >
-                      {headers.map((header) => (
-                        <option key={header}>{header}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    {definition.metricLabel} 列
-                    <select
-                      value={measurementColumn}
-                      onChange={(event) =>
-                        setMeasurementColumn(event.target.value)
-                      }
-                    >
-                      {headers.map((header) => (
-                        <option key={header}>{header}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    className="primary"
-                    disabled={busy}
-                    onClick={() => void upload()}
-                  >
-                    保存并解析
-                  </button>
-                </>
-              )}
-            </div>
-            {plateImports.map((item) => (
-              <p className="assay-import" key={item.id}>
-                <b>{item.fileName}</b> · {item.measurementCount} 条{" "}
-                {item.metricKey} · SHA-256 {item.contentSha256.slice(0, 12)}…
-              </p>
-            ))}
-          </section>
-
-          <section className="assay-join-layer">
-            <header>
-              <div>
-                <b>3. Mapped Join Dataset</b>
-                <small>
-                  只显示同时存在 Mapping 和 Raw Measurement 的孔；本轮不做计算。
-                </small>
-              </div>
-              <span>{plateJoined.length} 条</span>
-            </header>
-            <div className="assay-join-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Well</th>
-                    <th>Sample</th>
-                    <th>{definition.itemLabel}</th>
-                    <th>Metric</th>
-                    <th>Value</th>
-                    <th>Raw file</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {plateJoined.map((row) => (
-                    <tr key={`${row.mappingId}-${row.measurementId}`}>
-                      <td>{row.wellPosition}</td>
-                      <td>{row.sampleCode}</td>
-                      <td>{row.assayItem}</td>
-                      <td>{row.metricKey}</td>
-                      <td>{row.textValue}</td>
-                      <td>{row.fileName}</td>
+          {(!isQpcr || step === 3) && (
+            <section className="assay-join-layer">
+              <header>
+                <div>
+                  <b>3. Mapped Join Dataset</b>
+                  <small>
+                    只显示同时存在 Mapping 和 Raw Measurement 的孔。
+                  </small>
+                </div>
+                <span>{plateJoined.length} 条</span>
+              </header>
+              <div className="assay-join-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Well</th>
+                      <th>Sample</th>
+                      <th>{definition.itemLabel}</th>
+                      <th>Metric</th>
+                      <th>Value</th>
+                      <th>Raw file</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              {plateJoined.length === 0 && (
-                <p>Mapping 与 Raw Result 尚无相同孔位。</p>
-              )}
-            </div>
-          </section>
+                  </thead>
+                  <tbody>
+                    {plateJoined.map((row) => (
+                      <tr key={`${row.mappingId}-${row.measurementId}`}>
+                        <td>{row.wellPosition}</td>
+                        <td>{row.sampleCode}</td>
+                        <td>{row.assayItem}</td>
+                        <td>{row.metricKey}</td>
+                        <td>{row.textValue}</td>
+                        <td>{row.fileName}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {plateJoined.length === 0 && (
+                  <p>Mapping 与 Raw Result 尚无相同孔位。</p>
+                )}
+              </div>
+            </section>
+          )}
         </>
       )}
-      {!selectedPlate && (
+      {!selectedPlate && (!isQpcr || step <= 3) && (
         <p className="assay-empty">
           先新建一块板，再进行 Mapping 或上传 Raw Result。
         </p>
+      )}
+      {isQpcr && step === 4 && (
+        <QpcrAnalysisWorkspace
+          recordId={record.id}
+          workspace={workspace}
+          refresh={async () => {
+            await refresh(selectedPlateId);
+            changed();
+          }}
+        />
+      )}
+      {isQpcr && (
+        <footer className="assay-step-footer">
+          <button
+            className="secondary"
+            disabled={step === 1}
+            onClick={() => setStep((current) => Math.max(1, current - 1))}
+          >
+            上一步
+          </button>
+          <span>步骤 {step} / 4</span>
+          <button
+            className="primary"
+            disabled={step === 4}
+            onClick={() => setStep((current) => Math.min(4, current + 1))}
+          >
+            下一步
+          </button>
+        </footer>
       )}
       {error && <p className="form-error">{error}</p>}
     </section>

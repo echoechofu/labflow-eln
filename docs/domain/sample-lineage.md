@@ -27,7 +27,7 @@ Record ── record_samples(input/output) ──> Sample
 | 细胞加刺激 | 输入 `PLATE`、`DISH` 或 `WELL`。Plate 按刺激因素、时间和孔数分配孔位，并生成多个 `WELL`；Dish/Well 代表状态变化，不生成新的输出 Sample。 |
 | RNA 提取 | 从直接上级 Task 的 `CELL`/`WELL`/`DISH` 输出中选择一个或多个输入；每个输入生成一个 `RNA`，并消耗输入。 |
 | 逆转录 | 从直接上级 Task 的 `RNA` 输出选择；每个输入生成一个 `CDNA`，记录为 `aliquot`。 |
-| qPCR | 从直接上级 Task 的 `CDNA` 输出选择；记录 aliquot usage，保存 Targets、Mapping 与 Raw Cq；不创建 Sample，本阶段不创建分析 Result。 |
+| qPCR | 从直接上级 Task 的 `CDNA` 输出选择；记录 aliquot usage，保存 Targets、Mapping、Raw Cq 与专属 ΔCt/ΔΔCt 分析快照；不创建 Sample，也不创建通用分析 Result。 |
 | Western Blot | 从直接上级 Task 的 `CELL`/`WELL`/`DISH` 输出选择；每个输入生成 `PROTEIN`，并消耗输入，同时创建 `western_blot_image` Result。 |
 | 上清收集 | 从直接上级 Task 的 `CELL`/`WELL`/`DISH` 输出选择；每个输入生成 `SUP`，输入为 `non_destructive`。 |
 | ELISA | 从直接上级 Task 的 `SUP` 输出选择；记录 aliquot usage，保存 Analytes、Mapping 与 Raw OD；不创建 Sample，本阶段不创建分析 Result。 |
@@ -41,7 +41,7 @@ Record ── record_samples(input/output) ──> Sample
 - `sample_usages` 的部分唯一索引确保一个 Sample 只有一个 `consumed` usage。
 - 选择上游产物时，执行器排除已消耗、归档、跨 Experiment 或不属于直接上游 Task 的 Sample。
 - 删除 Sample/ProcessEvent 前检查后续 lineage：有下游使用时写 `archived_at`，无下游时才删除相关引用和实体。
-- 终末检测的 Sample × AssayItem options、孔位映射和 Raw Measurement 均位于 `assay_*` 表，不写入 `samples`、`sample_relations` 或 `event_outputs`；ProcessEvent 只记录输入与 usage。
+- 终末检测的 Sample × AssayItem options、孔位映射和 Raw Measurement 均位于 `assay_*` 表，不写入 `samples`、`sample_relations` 或 `event_outputs`；qPCR ΔCt/ΔΔCt 分析同样只读取 join dataset 并保存分析快照，不产生新的 lineage 实体。ProcessEvent 只记录输入与 usage。
 - `lineage_status` 可为 `complete`、`partial`、`unknown`；schema 应用会将旧的无输入传代/铺板或无 Plate 输入的 Well 刺激标记为 `partial`。
 
 ## 当前边界

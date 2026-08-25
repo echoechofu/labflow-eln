@@ -90,6 +90,13 @@ export interface RecordItem {
   outputs: string[];
   history: HistoryItem[];
   renderedContent?: string;
+  analysisSections?: {
+    id: string;
+    kind: "delta_ct" | "delta_delta_ct";
+    title: string;
+    text: string;
+    savedAt: string;
+  }[];
   protocolVersion?: number;
   attachments?: {
     id: string;

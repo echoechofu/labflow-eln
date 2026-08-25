@@ -16,10 +16,11 @@
 | `samples`, `sample_relations`, `record_samples` | Sample、派生关系和 Record input/output 角色。 |
 | `process_events`, `event_inputs`, `event_outputs`, `sample_usages` | 过程事件、材料输入输出及使用语义。 |
 | `results`, `attachments` | Record 结果与附件元数据。 |
-| `containers`, `sample_locations`, `treatment_definitions`, `qpcr_plate_wells`, `sample_aliases` | 容器/位置历史、刺激定义、qPCR 孔位映射和 Sample 别名。 |
+| `containers`, `sample_locations`, `treatment_definitions`, `qpcr_plate_wells`, `sample_aliases` | 容器/位置历史、刺激定义、旧版 qPCR 孔位数据和 Sample 别名。 |
 | `entity_changes`, `export_manifests` | 实体级审计与 Record 合并导出清单。 |
 | `assay_items`, `assay_plates`, `assay_well_mappings` | 通用终末检测 Setup 与独立孔板映射。 |
 | `assay_raw_imports`, `assay_raw_measurements` | 原始文件导入元数据、SHA-256 与按孔解析值。 |
+| `qpcr_delta_ct_analyses`, `qpcr_delta_delta_ct_analyses` | qPCR 两层 Analysis 的配置、计算结果、名称和创建时间快照。 |
 
 ## 关系与约束
 
@@ -34,8 +35,10 @@
 
 SQLite 保存业务对象、JSON metadata、Record snapshot/正文、审计数据、附件/导出的相对定位符以及 export 内容 hash。二进制附件与导出 manifest 文件保存在 canonical 用户目录的 `files/` 下。manifest 写入成功后才插入数据库元数据；若 insert 失败，代码尝试删除刚创建的 manifest 文件，避免孤立的成功记录。
 
-终末检测 raw 文件也使用 Attachment 相对路径；导入表保存文件 hash、列选择和 metric，measurement 表保存数值/原文本及原行 JSON。`assay_well_mappings` 以 `(plate_id, well_position)` 唯一，raw measurement 以 `(import_id, well_position, metric_key)` 唯一。join 只在读取时连接共同 plate/well，不写回 Sample lineage。
+终末检测 raw 文件也使用 Attachment 相对路径；导入表保存文件 hash、列选择和 metric，measurement 表保存数值/原文本及原行 JSON。`assay_well_mappings` 以 `(plate_id, well_position)` 唯一，raw measurement 以 `(import_id, well_position, metric_key)` 唯一。join 只在读取时连接共同 plate/well，不写回 Sample lineage。通用 parser 支持 UTF-8 CSV/TSV/TXT；qPCR 还可从 XLSX 中定位同时包含 `Well` 与选定 measurement 列的工作表。
+
+qPCR ΔCt table 的 `config_json` 保存目的/内参角色、纳入 measurement ID 和 QC 备注，`result_json` 保存各 Target × 内参的独立结果及冻结文字。ΔΔCt table 引用来源 ΔCt analysis，保存单一内参、Sample 分组、对照模式/关系和 relative expression。分析保存时，同一 transaction 还会向 Record `current_data_json.analysisSections` 追加确切文字，并写 `record_changes`；导出直接携带这份 Record 数据。
 
 ## 历史、覆盖与保留
 
-Protocol 版本不会回写已存在 Record 的 snapshot/正文。Sample 或 ProcessEvent 有下游 lineage 时采用归档（`archived_at`）而不是删除。Record 变更表与实体变更表提供审计存放位置，但当前 schema 没有把所有表更新都强制写入 audit，也没有通用的数据库级“Record 不可 UPDATE”trigger。历史保留的实际强制程度应以各 focused command 的 transaction 和约束为准。
+Protocol 版本不会回写已存在 Record 的 snapshot/首次渲染正文。qPCR Analysis 允许在其后追加新的冻结分析文字，但不覆盖旧正文或已有分析 section。Sample 或 ProcessEvent 有下游 lineage 时采用归档（`archived_at`）而不是删除。Record 变更表与实体变更表提供审计存放位置，但当前 schema 没有把所有表更新都强制写入 audit，也没有通用的数据库级“Record 不可 UPDATE”trigger。历史保留的实际强制程度应以各 focused command 的 transaction 和约束为准。

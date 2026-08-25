@@ -578,7 +578,7 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
         for attachment in attachment_rows {
             attachments.push(attachment.map_err(|error| error.to_string())?);
         }
-        records.push(json!({"id":id,"taskId":task_id,"experimentId":experiment_id,"protocolId":protocol_id,"title":current["title"],"updated":updated,"notes":current["notes"],"inputs":inputs,"outputs":outputs,"results":results,"attachments":attachments,"history":history,"renderedContent":current["renderedContent"],"values":current["values"],"protocolVersion":snapshot["version"]}));
+        records.push(json!({"id":id,"taskId":task_id,"experimentId":experiment_id,"protocolId":protocol_id,"title":current["title"],"updated":updated,"notes":current["notes"],"inputs":inputs,"outputs":outputs,"results":results,"attachments":attachments,"history":history,"renderedContent":current["renderedContent"],"analysisSections":current["analysisSections"],"values":current["values"],"protocolVersion":snapshot["version"]}));
     }
     Ok(
         json!({"experiments":experiments,"tasks":tasks,"protocols":protocols,"samples":samples,"records":records}),
@@ -982,6 +982,15 @@ fn create_assay_plate(state: State<DatabaseState>, request: Value) -> Result<(),
 }
 
 #[tauri::command]
+fn delete_empty_assay_plate(state: State<DatabaseState>, plate_id: String) -> Result<(), String> {
+    let conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    terminal_assay::delete_empty_plate(&conn, &plate_id)
+}
+
+#[tauri::command]
 fn replace_assay_plate_mappings(
     state: State<DatabaseState>,
     plate_id: String,
@@ -1007,6 +1016,30 @@ fn upload_assay_raw_file(
         .lock()
         .map_err(|_| "Database lock poisoned".to_string())?;
     terminal_assay::upload_raw(&mut conn, &attachments_dir(&app)?, &request, &bytes)
+}
+
+#[tauri::command]
+fn create_qpcr_delta_ct_analysis(
+    state: State<DatabaseState>,
+    request: Value,
+) -> Result<Value, String> {
+    let mut conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    terminal_assay::create_delta_ct_analysis(&mut conn, &request)
+}
+
+#[tauri::command]
+fn create_qpcr_delta_delta_ct_analysis(
+    state: State<DatabaseState>,
+    request: Value,
+) -> Result<Value, String> {
+    let mut conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    terminal_assay::create_delta_delta_ct_analysis(&mut conn, &request)
 }
 
 /// Focused desktop repository commands.  New sample/lineage workflows use
@@ -1652,8 +1685,11 @@ pub fn run() {
             start_task_record,
             get_assay_workspace,
             create_assay_plate,
+            delete_empty_assay_plate,
             replace_assay_plate_mappings,
             upload_assay_raw_file,
+            create_qpcr_delta_ct_analysis,
+            create_qpcr_delta_delta_ct_analysis,
             user_data_location,
             create_export_manifest,
             mark_export_print_requested,
