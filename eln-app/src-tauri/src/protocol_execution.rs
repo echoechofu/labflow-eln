@@ -302,6 +302,11 @@ pub fn execute(
     }
     let snapshot = json!({"name":protocol_name,"version":version,"schema":spec});
     tx.execute("INSERT INTO records (id,task_id,experiment_id,protocol_id,protocol_snapshot_json,current_data_json,updated_at) VALUES (?1,?2,?3,?4,?5,'{}',?6)", params![record_id,task_id,experiment_id,protocol_id,snapshot.to_string(),task_date]).map_err(|error| error.to_string())?;
+    if spec.get("terminalAssay").is_some() {
+        let items = string_value(&values, "assay_items")
+            .ok_or("Terminal assay requires at least one assay item")?;
+        crate::terminal_assay::create_items(&tx, record_id, items)?;
+    }
     let inputs =
         if execution.get("inputSource").and_then(Value::as_str) == Some("parent_task_outputs") {
             resolve_parent_task_inputs(&tx, task_id, &experiment_id, execution, &supplied_inputs)?
@@ -606,7 +611,7 @@ pub fn execute(
         .map_err(|error| error.to_string())?;
         output_ids.push(id);
     }
-    if output_ids.is_empty() {
+    if output_ids.is_empty() && spec.get("terminalAssay").is_none() {
         if let Some((id, _)) = &input {
             tx.execute(
                 "INSERT INTO event_outputs VALUES (?1,?2)",
@@ -1057,6 +1062,7 @@ mod tests {
             "pro-wb",
             "pro-supernatant",
             "pro-elisa",
+            "pro-cck8",
         ] {
             let versions: i64 = db
                 .query_row(
@@ -1180,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn supernatant_is_non_destructive_and_assays_create_results_not_samples() {
+    fn supernatant_is_non_destructive_and_elisa_creates_setup_not_samples_or_results() {
         let (mut db, path) = database();
         upstream_samples(
             &db,
@@ -1229,13 +1235,26 @@ mod tests {
             "elisa-task",
             "pro-elisa",
             "elisa-record",
-            json!({"analytes":"IL-4, IL-10","sample_dilution":"1","reference_wavelength":"570 nm"}),
+            json!({"assay_items":"IL-4, IL-10","sample_dilution":"1","reference_wavelength":"570 nm"}),
             supernatant.output_ids,
         )
         .unwrap();
         assert!(elisa.output_ids.is_empty());
-        let result_count: i64 = db.query_row("SELECT count(*) FROM results WHERE record_id='elisa-record' AND result_type='elisa_od'", [], |row| row.get(0)).unwrap();
-        assert_eq!(result_count, 1);
+        let result_count: i64 = db
+            .query_row(
+                "SELECT count(*) FROM results WHERE record_id='elisa-record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let item_count: i64 = db
+            .query_row(
+                "SELECT count(*) FROM assay_items WHERE record_id='elisa-record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!((result_count, item_count), (0, 2));
         drop(db);
         fs::remove_file(path).unwrap();
     }
@@ -1287,7 +1306,7 @@ mod tests {
     }
 
     #[test]
-    fn reverse_transcription_and_qpcr_keep_samples_and_results_separate() {
+    fn reverse_transcription_and_qpcr_keep_terminal_assay_out_of_sample_lineage() {
         let (mut db, path) = database();
         upstream_samples(&db, "rt-task", &[("rna-1", "RNA", "{}")]);
         let rt = execute(
@@ -1316,19 +1335,22 @@ mod tests {
             "qpcr-task",
             "pro-qpcr",
             "qpcr-record",
-            json!({"target_genes":"TIAM1","reference_gene":"GAPDH","technical_replicates":"3"}),
+            json!({"assay_items":"Actin, GAPDH, ARH"}),
             rt.output_ids,
         )
         .unwrap();
         assert!(qpcr.output_ids.is_empty());
-        let results: i64 = db
+        let terminal_state: (i64, i64, i64) = db
             .query_row(
-                "SELECT count(*) FROM results WHERE record_id='qpcr-record' AND result_type='qpcr_ct'",
+                "SELECT
+                   (SELECT count(*) FROM results WHERE record_id='qpcr-record'),
+                   (SELECT count(*) FROM assay_items WHERE record_id='qpcr-record'),
+                   (SELECT count(*) FROM event_outputs WHERE event_id='event-qpcr-record')",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(results, 1);
+        assert_eq!(terminal_state, (0, 3, 0));
         drop(db);
         fs::remove_file(path).unwrap();
     }

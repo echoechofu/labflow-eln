@@ -43,6 +43,60 @@ CREATE TABLE IF NOT EXISTS sample_usages (
 CREATE UNIQUE INDEX IF NOT EXISTS sample_single_destructive_usage ON sample_usages(sample_id) WHERE usage_type='consumed';
 CREATE TABLE IF NOT EXISTS entity_changes (id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, field_path TEXT NOT NULL, old_value_json TEXT NOT NULL, new_value_json TEXT NOT NULL, actor_id TEXT NOT NULL DEFAULT 'local_user', changed_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS qpcr_plate_wells (id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL REFERENCES experiments(id), source_cdna_sample_id TEXT NOT NULL REFERENCES samples(id), target_name TEXT NOT NULL, technical_replicate_index INTEGER NOT NULL, plate_position TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(experiment_id, plate_position));
+CREATE TABLE IF NOT EXISTS assay_items (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL REFERENCES records(id),
+  display_name TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(record_id, display_name),
+  UNIQUE(record_id, position)
+);
+CREATE TABLE IF NOT EXISTS assay_plates (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL REFERENCES records(id),
+  name TEXT NOT NULL,
+  plate_model TEXT NOT NULL CHECK(plate_model IN ('6','12','24','48','96','384')),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS assay_well_mappings (
+  id TEXT PRIMARY KEY,
+  plate_id TEXT NOT NULL REFERENCES assay_plates(id),
+  well_position TEXT NOT NULL,
+  sample_id TEXT REFERENCES samples(id),
+  assay_item_id TEXT REFERENCES assay_items(id),
+  assignment_role TEXT NOT NULL DEFAULT 'measurement' CHECK(assignment_role IN ('measurement','blank','standard')),
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  UNIQUE(plate_id, well_position),
+  CHECK(assignment_role <> 'measurement' OR (sample_id IS NOT NULL AND assay_item_id IS NOT NULL))
+);
+CREATE TABLE IF NOT EXISTS assay_raw_imports (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL REFERENCES records(id),
+  plate_id TEXT NOT NULL REFERENCES assay_plates(id),
+  attachment_id TEXT NOT NULL UNIQUE REFERENCES attachments(id),
+  metric_key TEXT NOT NULL,
+  well_column TEXT NOT NULL,
+  measurement_column TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS assay_raw_measurements (
+  id TEXT PRIMARY KEY,
+  import_id TEXT NOT NULL REFERENCES assay_raw_imports(id),
+  well_position TEXT NOT NULL,
+  metric_key TEXT NOT NULL,
+  numeric_value REAL,
+  text_value TEXT NOT NULL,
+  raw_row_json TEXT NOT NULL,
+  UNIQUE(import_id, well_position, metric_key)
+);
+CREATE INDEX IF NOT EXISTS assay_items_record_index ON assay_items(record_id);
+CREATE INDEX IF NOT EXISTS assay_plates_record_index ON assay_plates(record_id);
+CREATE INDEX IF NOT EXISTS assay_mappings_plate_index ON assay_well_mappings(plate_id);
+CREATE INDEX IF NOT EXISTS assay_raw_imports_plate_index ON assay_raw_imports(plate_id);
+CREATE INDEX IF NOT EXISTS assay_raw_measurements_import_index ON assay_raw_measurements(import_id);
 CREATE TABLE IF NOT EXISTS export_manifests (
   id TEXT PRIMARY KEY,
   date_from TEXT NOT NULL,

@@ -120,7 +120,7 @@ pub fn summary(assignments: &[WellAssignment]) -> String {
     lines.join("\n")
 }
 
-fn well_positions(capacity: usize) -> Vec<String> {
+pub fn well_positions(capacity: usize) -> Vec<String> {
     let (rows, columns) = match capacity {
         6 => (2, 3),
         12 => (3, 4),

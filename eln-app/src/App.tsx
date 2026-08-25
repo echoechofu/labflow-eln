@@ -25,6 +25,7 @@ import {
   TASK_GRAPH_NODE_HEIGHT,
   TASK_GRAPH_NODE_WIDTH,
 } from "./taskGraph";
+import TerminalAssayWorkspace from "./TerminalAssayWorkspace";
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 64;
@@ -165,6 +166,7 @@ export default function App() {
           openedRecordId={openedRecordId}
           closeRecord={() => setOpenedRecordId(undefined)}
           openRecord={setOpenedRecordId}
+          changed={load}
         />
       )}
       {selectedTask && (
@@ -1089,13 +1091,18 @@ function RecordsPage({
   openedRecordId,
   closeRecord,
   openRecord,
+  changed,
 }: {
   store: Store;
   openedRecordId?: string;
   closeRecord: () => void;
   openRecord: (id: string) => void;
+  changed: () => void;
 }) {
   const record = store.records.find((item) => item.id === openedRecordId);
+  const recordProtocol = store.protocols.find(
+    (protocol) => protocol.id === record?.protocolId,
+  );
   const taskForRecord = (recordId: string) => {
     const item = store.records.find((candidate) => candidate.id === recordId);
     return store.tasks.find((task) => task.id === item?.taskId);
@@ -1502,6 +1509,14 @@ function RecordsPage({
                     {record.renderedContent || record.notes || "暂无正文。"}
                   </p>
                 </section>
+                {recordProtocol?.terminalAssay && (
+                  <TerminalAssayWorkspace
+                    record={record}
+                    samples={store.samples}
+                    definition={recordProtocol.terminalAssay}
+                    changed={changed}
+                  />
+                )}
               </article>
             </div>
           </section>

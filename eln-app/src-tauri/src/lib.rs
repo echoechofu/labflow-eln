@@ -12,6 +12,7 @@ mod plate_layout;
 mod protocol_catalog;
 mod protocol_execution;
 mod task_graph;
+mod terminal_assay;
 
 struct DatabaseState(Mutex<Connection>);
 
@@ -507,7 +508,7 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
     }
     let mut protocols = Vec::new();
     let mut statement = connection.prepare("SELECT p.id, p.name, p.category, p.active_version, p.accent, pv.schema_json FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| { let schema: String = row.get(5)?; let spec: Value = serde_json::from_str::<Value>(&schema).unwrap_or(json!({"blocks":[]})); Ok(json!({"id":row.get::<_,String>(0)?,"name":row.get::<_,String>(1)?,"category":row.get::<_,String>(2)?,"version":row.get::<_,i64>(3)?,"accent":row.get::<_,String>(4)?,"blocks":spec["blocks"],"fields":spec["fields"],"template":spec["template"],"templateSelector":spec["templateSelector"],"templateVariants":spec["templateVariants"],"execution":spec["execution"]})) }).map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| { let schema: String = row.get(5)?; let spec: Value = serde_json::from_str::<Value>(&schema).unwrap_or(json!({"blocks":[]})); Ok(json!({"id":row.get::<_,String>(0)? ,"name":row.get::<_,String>(1)? ,"category":row.get::<_,String>(2)? ,"version":row.get::<_,i64>(3)? ,"accent":row.get::<_,String>(4)? ,"blocks":spec["blocks"],"fields":spec["fields"],"template":spec["template"],"templateSelector":spec["templateSelector"],"templateVariants":spec["templateVariants"],"execution":spec["execution"],"terminalAssay":spec["terminalAssay"]})) }).map_err(|e| e.to_string())?;
     for row in rows {
         protocols.push(row.map_err(|e| e.to_string())?)
     }
@@ -960,6 +961,52 @@ fn start_task_record(
         input_sample_ids,
     )
     .map(|result| result.task)
+}
+
+#[tauri::command]
+fn get_assay_workspace(state: State<DatabaseState>, record_id: String) -> Result<Value, String> {
+    let conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    terminal_assay::workspace(&conn, &record_id)
+}
+
+#[tauri::command]
+fn create_assay_plate(state: State<DatabaseState>, request: Value) -> Result<(), String> {
+    let conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    terminal_assay::create_plate(&conn, &request)
+}
+
+#[tauri::command]
+fn replace_assay_plate_mappings(
+    state: State<DatabaseState>,
+    plate_id: String,
+    mappings: Vec<Value>,
+    changed_at: String,
+) -> Result<(), String> {
+    let mut conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    terminal_assay::replace_mappings(&mut conn, &plate_id, &mappings, &changed_at)
+}
+
+#[tauri::command]
+fn upload_assay_raw_file(
+    app: AppHandle,
+    state: State<DatabaseState>,
+    request: Value,
+    bytes: Vec<u8>,
+) -> Result<Value, String> {
+    let mut conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    terminal_assay::upload_raw(&mut conn, &attachments_dir(&app)?, &request, &bytes)
 }
 
 /// Focused desktop repository commands.  New sample/lineage workflows use
@@ -1603,6 +1650,10 @@ pub fn run() {
             delete_task,
             update_task_status,
             start_task_record,
+            get_assay_workspace,
+            create_assay_plate,
+            replace_assay_plate_mappings,
+            upload_assay_raw_file,
             user_data_location,
             create_export_manifest,
             mark_export_print_requested,
@@ -1650,8 +1701,8 @@ mod tests {
         let path = temporary_database_path("fresh");
         let connection = Connection::open(&path).unwrap();
         apply_schema(&connection).unwrap();
-        let table_count: i64 = connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('experiments','tasks','protocols','records','samples','attachments','export_manifests')", [], |row| row.get(0)).unwrap();
-        assert_eq!(table_count, 7);
+        let table_count: i64 = connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('experiments','tasks','protocols','records','samples','attachments','export_manifests','assay_items','assay_plates','assay_well_mappings','assay_raw_imports','assay_raw_measurements')", [], |row| row.get(0)).unwrap();
+        assert_eq!(table_count, 12);
         drop(connection);
         fs::remove_file(path).unwrap();
     }

@@ -9,9 +9,10 @@ LabFlow 是一个 local-first 的 macOS 实验管理与电子实验记录本（E
 - Tauri macOS 桌面应用、开发模式与 `.app` 打包。
 - 实验日历：Task 的创建、编辑、删除、状态流转与 24 小时周视图。
 - Experiment 内只读 Task 关系图：支持分支、合流与孤立 Task；点击节点可打开既有 Task 详情。
-- 内置细胞复苏、细胞传代、铺板、刺激、RNA 提取、逆转录、qPCR、WB、上清液等 Protocol 执行流程。
+- 内置细胞复苏、细胞传代、铺板、刺激、RNA 提取、逆转录、qPCR、WB、上清液、ELISA、CCK-8 等 Protocol 执行流程。
 - Protocol Snapshot：创建 Record 时冻结版本与渲染后的实验正文，后续修改 Protocol 不会改写历史 Record。
 - Protocol 驱动的 Sample/Result：支持输入选择、消耗、派生、孔板分孔、Result 与 Sample 分离及内部 lineage 完整性。
+- qPCR、ELISA、CCK-8 共用独立的 Plate Mapping 与 Raw Data 骨架：保存 Sample × 检测项目映射、CSV/TSV 原文件及按孔位形成的 join dataset；当前不包含计算或分析 Result。
 - Records 按 Task 的实验日期分组；可选择日期/记录后合并预览，并通过 macOS 系统打印面板保存 PDF。
 - 导出清单、附件与 SQLite 均与源码目录隔离。
 
@@ -27,6 +28,10 @@ React UI
 ```
 
 开发网页兼容层可以使用 Express，但打包后的桌面应用使用 Tauri 直接访问本地领域层与 SQLite。
+
+## Documentation
+
+长期维护文档位于 [`../docs/`](../docs/)，涵盖当前产品边界、核心工作流、领域模型、Protocol 与 Sample lineage、架构/数据库说明，以及已接受的架构决策（ADR）。
 
 ## 用户数据与源码隔离
 
@@ -87,7 +92,7 @@ cargo +1.98.0 test --manifest-path src-tauri/Cargo.toml
 - Record 保存独立的 Protocol snapshot 与渲染正文；历史记录不引用可变模板。
 - Sample 编号保持简洁：Experiment 编号加类型后缀；实验细节存于 metadata。
 - Sample lineage 是内部完整性模型，不作为用户主要工作流的可视化对象。
-- qPCR、WB 等测量结果写入 `results`，不伪装为 Sample。
+- WB 等结构化测量产物写入 `results`，不伪装为 Sample；新版 qPCR、ELISA、CCK-8 的 Setup、Mapping 与 Raw Measurement 使用独立 `assay_*` 表，本阶段不创建分析 Result。
 
 ## 归档说明
 

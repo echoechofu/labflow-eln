@@ -185,6 +185,119 @@ export async function startTaskRecord(
   });
 }
 
+export interface AssayWorkspace {
+  items: {
+    id: string;
+    displayName: string;
+    position: number;
+    metadata: Record<string, unknown>;
+  }[];
+  plates: {
+    id: string;
+    name: string;
+    plateModel: string;
+    createdAt: string;
+  }[];
+  mappings: {
+    id: string;
+    plateId: string;
+    wellPosition: string;
+    sampleId: string;
+    assayItemId: string;
+    assignmentRole: "measurement" | "blank" | "standard";
+    metadata: Record<string, unknown>;
+  }[];
+  imports: {
+    id: string;
+    plateId: string;
+    attachmentId: string;
+    fileName: string;
+    relativePath: string;
+    metricKey: string;
+    wellColumn: string;
+    measurementColumn: string;
+    contentSha256: string;
+    importedAt: string;
+    measurementCount: number;
+  }[];
+  joinedWells: {
+    mappingId: string;
+    measurementId: string;
+    plateId: string;
+    plateName: string;
+    wellPosition: string;
+    sampleId: string;
+    sampleCode: string;
+    assayItemId: string;
+    assayItem: string;
+    importId: string;
+    fileName: string;
+    metricKey: string;
+    numericValue?: number;
+    textValue: string;
+  }[];
+}
+
+export async function getAssayWorkspace(recordId: string) {
+  desktopOnly();
+  return invoke<AssayWorkspace>("get_assay_workspace", { recordId });
+}
+
+export async function createAssayPlate(request: {
+  id: string;
+  recordId: string;
+  name: string;
+  plateModel: string;
+  createdAt: string;
+}) {
+  desktopOnly();
+  await invoke("create_assay_plate", { request });
+}
+
+export async function replaceAssayPlateMappings(
+  plateId: string,
+  mappings: {
+    id: string;
+    wellPosition: string;
+    sampleId: string;
+    assayItemId: string;
+  }[],
+) {
+  desktopOnly();
+  await invoke("replace_assay_plate_mappings", {
+    plateId,
+    mappings,
+    changedAt: new Date().toISOString(),
+  });
+}
+
+export interface RawUploadResult {
+  id: string;
+  attachmentId: string;
+  relativePath: string;
+  contentSha256: string;
+  measurementCount: number;
+}
+
+export async function uploadAssayRawFile(
+  request: {
+    id: string;
+    recordId: string;
+    plateId: string;
+    attachmentId: string;
+    fileName: string;
+    mimeType: string;
+    metricKey: string;
+    wellColumn: string;
+    measurementColumn: string;
+    importedAt: string;
+  },
+  bytes: number[],
+) {
+  desktopOnly();
+  return invoke<RawUploadResult>("upload_assay_raw_file", { request, bytes });
+}
+
 export interface ExportManifestResult {
   id: string;
   contentSha256: string;

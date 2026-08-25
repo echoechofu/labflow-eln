@@ -1,0 +1,184 @@
+.terminal-assay {
+  margin-top: 24px;
+  padding: 22px;
+  border: 1px solid #e4e2ed;
+  border-radius: 18px;
+  background: #fafafe;
+}
+.terminal-assay-title,
+.assay-mapping-layer > header,
+.assay-raw-layer > header,
+.assay-join-layer > header,
+.assay-mapping-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.terminal-assay-title h2 {
+  margin: 0 0 4px;
+}
+.terminal-assay-title p,
+.assay-mapping-layer small,
+.assay-raw-layer small,
+.assay-join-layer small {
+  margin: 0;
+  color: #777487;
+}
+.terminal-assay-title > span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #6957e8;
+  background: #edeaff;
+  white-space: nowrap;
+}
+.assay-create-plate,
+.assay-upload-row {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+.assay-create-plate input,
+.assay-create-plate select,
+.assay-upload-row select {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #dcd9e8;
+  border-radius: 9px;
+  background: white;
+}
+.assay-upload-row label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: #666274;
+}
+.assay-plate-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 18px 0;
+  overflow-x: auto;
+}
+.assay-plate-tabs button {
+  padding: 9px 12px;
+  border: 1px solid #ddd9eb;
+  border-radius: 10px;
+  background: white;
+  white-space: nowrap;
+}
+.assay-plate-tabs button.active {
+  color: #fff;
+  border-color: #6957e8;
+  background: #6957e8;
+}
+.assay-mapping-layer,
+.assay-raw-layer,
+.assay-join-layer {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid #e5e2ee;
+  border-radius: 14px;
+  background: white;
+}
+.assay-mapping-layer header > div,
+.assay-raw-layer header > div,
+.assay-join-layer header > div {
+  display: grid;
+  gap: 4px;
+}
+.assay-mapping-layer header select {
+  max-width: 420px;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid #ddd9e8;
+  border-radius: 9px;
+}
+.assay-plate-scroll {
+  margin-top: 14px;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+.assay-plate-grid {
+  display: grid;
+  gap: 6px;
+  min-width: max-content;
+}
+.assay-plate-grid button {
+  width: 70px;
+  height: 64px;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid #dedbe9;
+  border-radius: 9px;
+  background: #f7f6fb;
+  text-align: left;
+}
+.assay-plate-grid button.mapped {
+  border-color: #6957e8;
+  background: #eeebff;
+}
+.assay-plate-grid b {
+  display: block;
+  font-size: 11px;
+}
+.assay-plate-grid span {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 9px;
+  color: #6d687b;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.assay-mapping-summary {
+  align-items: end;
+  margin-top: 12px;
+}
+.assay-mapping-summary > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.assay-mapping-summary span,
+.assay-import {
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: #f2f0f9;
+  font-size: 11px;
+}
+.assay-import {
+  margin: 10px 0 0;
+  word-break: break-word;
+}
+.assay-join-table {
+  margin-top: 12px;
+  overflow: auto;
+}
+.assay-join-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.assay-join-table th,
+.assay-join-table td {
+  padding: 8px;
+  border-bottom: 1px solid #eceaf2;
+  text-align: left;
+  white-space: nowrap;
+}
+.assay-empty {
+  margin: 18px 0 0;
+  color: #777487;
+}
+@media (max-width: 900px) {
+  .terminal-assay-title,
+  .assay-mapping-layer > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .assay-mapping-layer header select {
+    max-width: none;
+  }
+}

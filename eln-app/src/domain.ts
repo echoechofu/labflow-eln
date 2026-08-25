@@ -39,6 +39,12 @@ export interface ProtocolExecution {
   resultTypes?: string[];
   consumptionPolicy?: "consume" | "non_destructive" | "aliquot";
 }
+export interface TerminalAssayDefinition {
+  itemLabel: string;
+  metricKey: string;
+  metricLabel: string;
+  plateModels: string[];
+}
 export interface Protocol {
   id: string;
   name: string;
@@ -51,6 +57,7 @@ export interface Protocol {
   templateSelector?: string;
   templateVariants?: Record<string, string>;
   execution?: ProtocolExecution;
+  terminalAssay?: TerminalAssayDefinition;
 }
 export interface Sample {
   id: string;

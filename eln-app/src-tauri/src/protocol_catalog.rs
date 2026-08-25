@@ -7,7 +7,7 @@ pub struct BuiltinProtocol {
     pub schema: &'static str,
 }
 
-pub fn builtins() -> [BuiltinProtocol; 10] {
+pub fn builtins() -> [BuiltinProtocol; 11] {
     [
         BuiltinProtocol {
             id: "pro-cell-thaw",
@@ -62,8 +62,8 @@ pub fn builtins() -> [BuiltinProtocol; 10] {
             name: "SYBR Green qPCR",
             category: "分子生物学",
             accent: "#6957e8",
-            schema_version: 2,
-            schema: r#"{"schemaVersion":2,"blocks":["选择 cDNA","反应体系","扩增程序","Ct 数据"],"fields":[{"key":"target_genes","label":"目的基因（逗号分隔）","kind":"text","required":true},{"key":"reference_gene","label":"内参基因","kind":"text","required":true,"defaultValue":"GAPDH"},{"key":"technical_replicates","label":"技术重复数","kind":"number","required":true,"defaultValue":"3"}],"template":"日期：{{date}}\n输入 cDNA：{{input_sample_summary}}\n目的基因：{{target_genes}}；内参：{{reference_gene}}；技术重复：{{technical_replicates}}。\n\n每个25 μL反应：SYBR Premix Ex TaqII 12.5 μL，正向引物1.0 μL，反向引物1.0 μL，cDNA 2.0 μL，RNase Free dH2O 8.5 μL。\n程序：95℃ 30 sec；40个循环（95℃ 5 sec，60℃ 30–60 sec）；Dissociation。\nCt原始数据作为Result保存，不作为Sample。","execution":{"eventType":"qpcr","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CDNA"],"outputMode":"none","resultTypes":["qpcr_ct"],"consumptionPolicy":"aliquot"}}"#,
+            schema_version: 3,
+            schema: r#"{"schemaVersion":3,"blocks":["选择 cDNA 与 Targets","反应体系","扩增程序","Plate Mapping 与 Raw Cq"],"fields":[{"key":"assay_items","label":"Targets（逗号分隔）","kind":"text","required":true}],"template":"日期：{{date}}\n输入 cDNA：{{input_sample_summary}}\nTargets：{{assay_items}}\n\n每个25 μL反应：SYBR Premix Ex TaqII 12.5 μL，正向引物1.0 μL，反向引物1.0 μL，cDNA 2.0 μL，RNase Free dH2O 8.5 μL。\n程序：95℃ 30 sec；40个循环（95℃ 5 sec，60℃ 30–60 sec）；Dissociation。\n\nPlate Mapping 与 Raw Cq 作为本 Record 的终末检测数据保存，不创建新的 Sample。","execution":{"eventType":"qpcr","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CDNA"],"outputMode":"none","consumptionPolicy":"aliquot"},"terminalAssay":{"itemLabel":"Target / Gene","metricKey":"cq","metricLabel":"Cq","plateModels":["96","384"]}}"#,
         },
         BuiltinProtocol {
             id: "pro-wb",
@@ -86,8 +86,16 @@ pub fn builtins() -> [BuiltinProtocol; 10] {
             name: "ELISA — 细胞因子",
             category: "分子生物学",
             accent: "#2c77b8",
+            schema_version: 2,
+            schema: r#"{"schemaVersion":2,"blocks":["选择培养上清与 Analytes","标准品与试剂准备","抗体孵育与洗板","TMB 显色与双波长读数"],"fields":[{"key":"assay_items","label":"Analytes（逗号分隔）","kind":"text","required":true},{"key":"sample_dilution","label":"样本稀释倍数","kind":"number","required":true,"defaultValue":"1"},{"key":"reference_wavelength","label":"参考波长","kind":"select","required":true,"options":["570 nm","630 nm"]}],"template":"日期：{{date}}\n输入上清：{{input_sample_summary}}\nAnalytes：{{assay_items}}；样本稀释倍数：{{sample_dilution}}；参考波长：{{reference_wavelength}}。\n\n1. 样本准备：细胞培养上清300 g离心10分钟去除沉淀，可立即检测或分装后-80℃储存。\n2. 按试剂盒配制1×洗液、1×检测缓冲液；检测抗体与链霉亲和素按1:100稀释并在30分钟内使用。\n3. 重溶细胞因子标准品，以细胞培养基进行1:1系列稀释，并设置零浓度标准品。\n4. 每孔加入300 μL洗液浸泡30秒并拍干；标准品孔加入100 μL标准品，样本孔加入80 μL检测缓冲液和20 μL样本。\n5. 每孔加入50 μL检测抗体，封板后300 rpm室温振荡孵育1.5小时；每孔300 μL洗液洗板6次。\n6. 每孔加入100 μL稀释的链霉亲和素，封板后300 rpm室温振荡孵育30分钟，再洗板6次。\n7. 每孔加入100 μL TMB，室温孵育5–30分钟；快速加入100 μL终止液。\n8. 立即测定450 nm及 {{reference_wavelength}}。Plate Mapping 与 Raw OD 作为本 Record 的终末检测数据保存，不创建新的 Sample。","execution":{"eventType":"elisa","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["SUP"],"outputMode":"none","consumptionPolicy":"aliquot"},"terminalAssay":{"itemLabel":"Analyte","metricKey":"od450","metricLabel":"OD450","plateModels":["96"]}}"#,
+        },
+        BuiltinProtocol {
+            id: "pro-cck8",
+            name: "CCK-8 细胞增殖/毒性实验",
+            category: "细胞实验",
+            accent: "#d8842f",
             schema_version: 1,
-            schema: r#"{"schemaVersion":1,"blocks":["选择培养上清","标准曲线","抗体孵育与洗板","显色读数"],"fields":[{"key":"analytes","label":"检测因子（逗号分隔）","kind":"text","required":true},{"key":"sample_dilution","label":"样本稀释倍数","kind":"number","required":true,"defaultValue":"1"},{"key":"reference_wavelength","label":"参考波长","kind":"select","required":true,"options":["570 nm","630 nm"]}],"template":"日期：{{date}}\n输入上清：{{input_sample_summary}}\n检测因子：{{analytes}}；样本稀释倍数：{{sample_dilution}}；参考波长：{{reference_wavelength}}。\n\n1. 试剂与样本平衡至室温，按试剂盒要求配制洗液、检测缓冲液和检测抗体。\n2. 配制标准曲线，样本按设定倍数稀释。\n3. 加样及检测抗体，室温振荡孵育1.5小时；洗板6次。\n4. 加入酶结合物孵育30分钟并洗板；加入TMB显色5–30分钟，终止反应。\n5. 读取450 nm及 {{reference_wavelength}} OD。OD与浓度数据作为Result保存，不作为Sample。","execution":{"eventType":"elisa","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["SUP"],"outputMode":"none","resultTypes":["elisa_od"],"consumptionPolicy":"aliquot"}}"#,
+            schema: r#"{"schemaVersion":1,"blocks":["选择细胞孔与 Conditions","加入 CCK-8","培养箱孵育","450 nm 读数"],"fields":[{"key":"assay_items","label":"Conditions（逗号分隔）","kind":"text","required":true},{"key":"assay_mode","label":"实验类型","kind":"select","required":true,"options":["细胞增殖","细胞毒性"]},{"key":"cell_count","label":"每孔细胞数","kind":"number","required":true},{"key":"culture_volume","label":"每孔培养体积（μL）","kind":"number","required":true,"defaultValue":"100"},{"key":"cck8_volume","label":"每孔 CCK-8 体积（μL）","kind":"number","required":true,"defaultValue":"10"},{"key":"incubation_time","label":"CCK-8 孵育时间（小时）","kind":"number","required":true,"defaultValue":"1"},{"key":"reference_wavelength","label":"参考波长（可选）","kind":"text","defaultValue":"650 nm"}],"template":"日期：{{date}}\n输入细胞孔：{{input_sample_summary}}\nConditions：{{assay_items}}\n实验类型：{{assay_mode}}；每孔细胞数：{{cell_count}}；培养体积：{{culture_volume}} μL；CCK-8：{{cck8_volume}} μL；孵育：{{incubation_time}}小时。\n\n1. 细胞增殖实验通常每孔加入100 μL、2000个细胞；细胞毒性实验通常每孔加入100 μL、5000个细胞，具体数量根据细胞大小和增殖速度调整，并按实验需要给予0–10 μL药物刺激。\n2. 每孔加入相当于培养体积10%的CCK-8溶液。可设置只有培养液和CCK-8、没有细胞的空白孔；药物可能干扰时，设置培养液、药物和CCK-8但没有细胞的空白孔。\n3. 培养箱内继续孵育0.5–4小时，多数情况1小时；初次实验可在0.5、1、2、4小时分别检测以选择合适时间点。\n4. 450 nm测定吸光度；无450 nm滤光片时可用420–480 nm，可用大于600 nm波长作双波长参考。\n5. 注意96孔板边缘蒸发、还原剂干扰及读数前孔内气泡。Plate Mapping 与 Raw OD 作为本 Record 的终末检测数据保存，不创建新的 Sample。","execution":{"eventType":"cck8","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["WELL"],"outputMode":"none","consumptionPolicy":"consume"},"terminalAssay":{"itemLabel":"Condition","metricKey":"od450","metricLabel":"OD450","plateModels":["96"]}}"#,
         },
     ]
 }

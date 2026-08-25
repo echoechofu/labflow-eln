@@ -3,3 +3,5 @@
 !/.gitignore
 !/eln-app/
 !/eln-app/**
+!/docs/
+!/docs/**
