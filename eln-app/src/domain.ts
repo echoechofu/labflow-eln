@@ -1,5 +1,6 @@
 export type TaskStatus = "planned" | "in_progress" | "completed";
-export type NavPage = "calendar" | "experiments" | "protocols" | "records";
+export type NavPage =
+  "calendar" | "experiments" | "protocols" | "records" | "data";
 
 export interface Experiment {
   id: string;
@@ -29,13 +30,21 @@ export interface ProtocolField {
   defaultValue?: string;
 }
 export interface ProtocolExecution {
+  engine?: "sample_flow_v1";
   eventType: string;
   inputTypes?: string[];
   inputSource?: "parent_task_outputs" | "experiment_samples";
   inputCardinality?: "one" | "many";
   outputType?: string;
   outputMode:
-    "one" | "count" | "per_input" | "plate_or_dish" | "plate_wells" | "none";
+    | "one"
+    | "count"
+    | "per_input"
+    | "per_input_count"
+    | "same_sample"
+    | "plate_or_dish"
+    | "plate_wells"
+    | "none";
   resultTypes?: string[];
   consumptionPolicy?: "consume" | "non_destructive" | "aliquot";
 }
@@ -52,12 +61,20 @@ export interface Protocol {
   version: number;
   blocks: string[];
   accent: string;
+  description?: string;
+  origin?: "builtin" | "user";
+  activeVersionOrigin?: "builtin" | "user";
   fields?: ProtocolField[];
   template?: string;
   templateSelector?: string;
   templateVariants?: Record<string, string>;
   execution?: ProtocolExecution;
   terminalAssay?: TerminalAssayDefinition;
+}
+export interface SampleTypeDefinition {
+  canonicalType: string;
+  displayName: string;
+  origin: "builtin" | "user";
 }
 export interface Sample {
   id: string;
@@ -70,6 +87,7 @@ export interface Sample {
   metadata?: Record<string, unknown>;
   lineageStatus?: "complete" | "partial" | "unknown";
   consumed?: boolean;
+  origin?: "internal" | "external";
 }
 
 export const normalizeSampleType = (value: string) => value.toUpperCase();

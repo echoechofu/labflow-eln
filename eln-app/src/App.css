@@ -155,6 +155,14 @@ h2 {
   border: 1px solid var(--line);
   color: #575467;
 }
+.danger {
+  background: #fff4f4;
+  border: 1px solid #efb8bd;
+  border-radius: 8px;
+  color: #b42f3b;
+  font-weight: 700;
+  padding: 11px 16px;
+}
 .calendar-toolbar {
   display: flex;
   align-items: center;
@@ -810,6 +818,69 @@ h2 {
 .picker small {
   color: #8d899b;
 }
+.protocol-search-modal {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 40px);
+  overflow: hidden;
+  width: min(620px, calc(100vw - 40px));
+}
+.protocol-search-field {
+  color: #666275;
+  display: grid;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 7px;
+  margin-top: 20px;
+}
+.protocol-search-field input {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-sizing: border-box;
+  color: var(--ink);
+  font: inherit;
+  padding: 12px 14px;
+  width: 100%;
+}
+.protocol-search-field input:focus {
+  border-color: #8f83e7;
+  box-shadow: 0 0 0 3px #6b5ce71a;
+  outline: 0;
+}
+.protocol-search-prompt,
+.protocol-search-empty {
+  background: #f7f6fb;
+  border: 1px dashed #d9d6e4;
+  border-radius: 9px;
+  color: var(--muted);
+  margin-top: 16px;
+  padding: 28px 20px;
+  text-align: center;
+}
+.protocol-search-empty b {
+  color: var(--ink);
+}
+.protocol-search-empty p {
+  font-size: 12px;
+  margin: 7px 0 16px;
+}
+.protocol-search-results {
+  flex: 1;
+  min-height: 0;
+  margin-top: 14px;
+  overflow-y: auto;
+  padding-right: 5px;
+}
+.protocol-search-results > small {
+  color: var(--muted);
+  display: block;
+  margin-bottom: 2px;
+}
+.protocol-search-results .picker small {
+  line-height: 1.45;
+}
 .record-overlay {
   justify-content: stretch;
   overflow: auto;
@@ -838,6 +909,22 @@ h2 {
   margin: 0;
   color: #898698;
   font-size: 11px;
+}
+.record-delete-error {
+  margin: 14px 48px 0;
+}
+.record-confirm-overlay {
+  z-index: 12;
+}
+.record-delete-confirm {
+  width: min(460px, calc(100vw - 40px));
+}
+.record-delete-actions,
+.record-body-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 .back {
   border: 0;
@@ -977,6 +1064,90 @@ h2 {
   resize: vertical;
   color: #4c495a;
 }
+.record-body-editor > p:first-child {
+  font-size: 12px;
+  margin: 0 0 10px;
+}
+.record-body-editor textarea {
+  min-height: 320px;
+  line-height: 1.65;
+  font: inherit;
+}
+
+.data-management-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.data-management-grid > article {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 26px;
+}
+.data-management-grid h2 {
+  margin: 16px 0 8px;
+}
+.data-management-grid p {
+  color: var(--muted);
+  line-height: 1.7;
+  min-height: 82px;
+}
+.data-management-icon {
+  align-items: center;
+  background: #efedff;
+  border-radius: 10px;
+  color: var(--purple);
+  display: flex;
+  font-size: 24px;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
+}
+.backup-success,
+.backup-error {
+  border-radius: 8px;
+  margin-top: 18px;
+  overflow-wrap: anywhere;
+  padding: 12px 14px;
+}
+.backup-success {
+  background: #eefaf2;
+  color: #277348;
+}
+.backup-confirm-overlay {
+  z-index: 12;
+}
+.backup-confirm {
+  width: min(620px, calc(100vw - 40px));
+}
+.backup-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.backup-summary > div {
+  background: #fff;
+  padding: 10px 12px;
+}
+.backup-summary dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+.backup-summary dd {
+  font-weight: 700;
+  margin: 4px 0 0;
+}
+.backup-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
 .record-sidebar > div {
   background: #fff;
   border: 1px solid var(--line);
@@ -1068,6 +1239,9 @@ h2 {
   }
   .record-row small {
     display: none;
+  }
+  .data-management-grid {
+    grid-template-columns: 1fr;
   }
 }
 

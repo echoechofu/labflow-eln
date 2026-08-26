@@ -5,15 +5,88 @@ import {
   samples as seedSamples,
   tasks as seedTasks,
 } from "./seed";
-import type { Experiment, Protocol, RecordItem, Sample, Task } from "./domain";
+import type {
+  Experiment,
+  Protocol,
+  RecordItem,
+  Sample,
+  SampleTypeDefinition,
+  Task,
+} from "./domain";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 export interface Store {
   experiments: Experiment[];
   tasks: Task[];
   protocols: Protocol[];
+  sampleTypes: SampleTypeDefinition[];
   samples: Sample[];
   records: RecordItem[];
+}
+export interface WorkspaceBackupSummary {
+  appVersion: string;
+  exportedAt: string;
+  databaseSchemaVersion: number;
+  counts: {
+    experiments: number;
+    tasks: number;
+    records: number;
+    samples: number;
+    attachments: number;
+    files: number;
+  };
+}
+export interface WorkspaceBackupExport {
+  path: string;
+  summary: WorkspaceBackupSummary;
+}
+export interface WorkspaceBackupRestore {
+  recoveryBackupPath: string;
+  summary: WorkspaceBackupSummary;
+}
+
+const backupFileName = () => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `LabFlow-Backup-${stamp}.labflow-backup`;
+};
+
+export async function exportWorkspaceBackup() {
+  desktopOnly();
+  const destination = await save({
+    title: "导出 LabFlow 工作区备份",
+    defaultPath: backupFileName(),
+    filters: [{ name: "LabFlow Backup", extensions: ["labflow-backup"] }],
+  });
+  if (!destination) return undefined;
+  return invoke<WorkspaceBackupExport>("export_workspace_backup", {
+    destination,
+    exportedAt: new Date().toISOString(),
+  });
+}
+
+export async function chooseWorkspaceBackup() {
+  desktopOnly();
+  const selected = await open({
+    title: "选择 LabFlow 工作区备份",
+    multiple: false,
+    directory: false,
+    filters: [{ name: "LabFlow Backup", extensions: ["labflow-backup"] }],
+  });
+  if (!selected || Array.isArray(selected)) return undefined;
+  const summary = await invoke<WorkspaceBackupSummary>(
+    "inspect_workspace_backup",
+    { path: selected },
+  );
+  return { path: selected, summary };
+}
+
+export async function restoreWorkspaceBackup(path: string) {
+  desktopOnly();
+  return invoke<WorkspaceBackupRestore>("restore_workspace_backup", {
+    path,
+    importedAt: new Date().toISOString(),
+  });
 }
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 export async function loadStore(): Promise<Store> {
@@ -27,6 +100,20 @@ export function initialStore(): Store {
     experiments: seedExperiments,
     tasks: seedTasks,
     protocols: seedProtocols,
+    sampleTypes: [
+      "CELL",
+      "PLATE",
+      "DISH",
+      "WELL",
+      "RNA",
+      "CDNA",
+      "PROTEIN",
+      "SUP",
+    ].map((canonicalType) => ({
+      canonicalType,
+      displayName: canonicalType === "CDNA" ? "cDNA" : canonicalType,
+      origin: "builtin" as const,
+    })),
     samples: seedSamples,
     records: seedRecords,
   });
@@ -164,6 +251,20 @@ export async function deleteTask(id: string) {
   desktopOnly();
   await invoke("delete_task", { id });
 }
+export async function deleteRecord(id: string) {
+  desktopOnly();
+  await invoke("delete_record", { id });
+}
+export async function updateRecordBody(id: string, renderedContent: string) {
+  desktopOnly();
+  const changedAt = new Date().toISOString();
+  await invoke("update_record_body", {
+    id,
+    renderedContent,
+    changeId: uid("record-change"),
+    changedAt,
+  });
+}
 export async function updateTaskStatus(id: string, status: Task["status"]) {
   desktopOnly();
   return invoke<Task>("update_task_status", { id, status });
@@ -174,6 +275,7 @@ export async function startTaskRecord(
   recordId: string,
   values: Record<string, string>,
   inputSampleIds: string[] = [],
+  externalInputs: ExternalSampleDraft[] = [],
 ) {
   desktopOnly();
   return invoke<Task>("start_task_record", {
@@ -182,7 +284,51 @@ export async function startTaskRecord(
     recordId,
     values,
     inputSampleIds,
+    externalInputs,
   });
+}
+
+export interface ExternalSampleDraft {
+  sampleType: string;
+  displayName: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UserProtocolDraft {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  accent: string;
+  inputType: string;
+  inputTypeDisplayName: string;
+  outputBehavior:
+    "same_sample" | "derived_one" | "derived_multiple" | "measurement_only";
+  outputType?: string;
+  outputTypeDisplayName?: string;
+  consumptionPolicy: "retain" | "consume";
+  template: string;
+  createdAt: string;
+}
+
+export async function saveUserProtocol(request: UserProtocolDraft) {
+  desktopOnly();
+  return invoke<{ id: string; version: number }>("save_user_protocol", {
+    request,
+  });
+}
+
+export async function saveProtocolTemplateVersion(request: {
+  protocolId: string;
+  template?: string;
+  templateVariants?: Record<string, string>;
+  createdAt: string;
+}) {
+  desktopOnly();
+  return invoke<{ id: string; previousVersion: number; version: number }>(
+    "save_protocol_template_version",
+    { request },
+  );
 }
 
 export interface AssayWorkspace {

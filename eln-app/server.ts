@@ -20,9 +20,28 @@ type Store = {
   experiments: typeof experiments;
   tasks: typeof tasks;
   protocols: typeof protocols;
+  sampleTypes: Array<{
+    canonicalType: string;
+    displayName: string;
+    origin: "builtin" | "user";
+  }>;
   samples: typeof samples;
   records: typeof records;
 };
+const builtinSampleTypes: Store["sampleTypes"] = [
+  "CELL",
+  "PLATE",
+  "DISH",
+  "WELL",
+  "RNA",
+  "CDNA",
+  "PROTEIN",
+  "SUP",
+].map((canonicalType) => ({
+  canonicalType,
+  displayName: canonicalType === "CDNA" ? "cDNA" : canonicalType,
+  origin: "builtin",
+}));
 const seed = () => {
   if (
     (
@@ -32,7 +51,14 @@ const seed = () => {
     ).count
   )
     return;
-  writeStore({ experiments, tasks, protocols, samples, records });
+  writeStore({
+    experiments,
+    tasks,
+    protocols,
+    sampleTypes: builtinSampleTypes,
+    samples,
+    records,
+  });
 };
 const writeStore = db.transaction((store: Store) => {
   for (const table of [
@@ -56,17 +82,24 @@ const writeStore = db.transaction((store: Store) => {
       e.color,
     );
   for (const p of store.protocols) {
-    db.prepare("INSERT INTO protocols VALUES (?,?,?,?,?)").run(
+    db.prepare(
+      "INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES (?,?,?,?,?,?,?)",
+    ).run(
       p.id,
       p.name,
       p.category,
       p.version,
       p.accent,
+      p.description ?? "",
+      p.origin ?? "builtin",
     );
-    db.prepare("INSERT INTO protocol_versions VALUES (?,?,?)").run(
+    db.prepare(
+      "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?,?,?,?,datetime('now'))",
+    ).run(
       p.id,
       p.version,
       JSON.stringify({ blocks: p.blocks }),
+      p.activeVersionOrigin ?? "builtin",
     );
   }
   for (const t of store.tasks)
@@ -214,6 +247,7 @@ const readStore = (): Store => {
         ) as { blocks: string[] }
       ).blocks,
     })),
+    sampleTypes: builtinSampleTypes,
     samples: (
       db.prepare("SELECT * FROM samples").all() as Array<{
         id: string;

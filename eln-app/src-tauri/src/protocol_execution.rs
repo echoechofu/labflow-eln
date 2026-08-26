@@ -63,15 +63,14 @@ fn next_sample_code(
     Err("Unable to allocate Sample code".into())
 }
 
-fn resolve_parent_task_inputs(
+fn resolve_experiment_inputs(
     tx: &Transaction<'_>,
-    task_id: &str,
     experiment_id: &str,
     execution: &Value,
     supplied: &[String],
 ) -> Result<Vec<(String, String)>, String> {
     if supplied.is_empty() {
-        return Err("Select at least one Sample output from an upstream Task".into());
+        return Err("Select or register at least one Sample in this Experiment".into());
     }
     if execution
         .get("inputCardinality")
@@ -109,17 +108,13 @@ fn resolve_parent_task_inputs(
             .query_row(
                 "SELECT upper(sample.sample_type)
                  FROM samples sample
-                 JOIN record_samples link ON link.sample_id=sample.id AND link.role='output'
-                 JOIN tasks parent ON parent.record_id=link.record_id
-                 JOIN task_relations relation ON relation.parent_task_id=parent.id
-                    AND relation.child_task_id=?1 AND relation.experiment_id=?2
-                 WHERE sample.id=?3 AND sample.experiment_id=?2 AND sample.archived_at IS NULL
+                 WHERE sample.id=?1 AND sample.experiment_id=?2 AND sample.archived_at IS NULL
                    AND NOT EXISTS (SELECT 1 FROM sample_usages usage WHERE usage.sample_id=sample.id AND usage.usage_type='consumed')",
-                params![task_id, experiment_id, id],
+                params![id, experiment_id],
                 |row| row.get(0),
             )
             .map_err(|_| {
-                "Input Sample must be an output of a direct upstream Task in this Experiment"
+                "Input Sample must be available in this Experiment and must not be consumed"
                     .to_string()
             })?;
         if !accepted.is_empty() && !accepted.contains(&sample_type) {
@@ -151,6 +146,77 @@ fn insert_sample(
         tx.execute("INSERT INTO sample_relations (id,parent_sample_id,child_sample_id,relation_type) VALUES (?1,?2,?3,'derived_from')", params![format!("relation-{id}"), parent, id]).map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn insert_external_sample(
+    tx: &Transaction<'_>,
+    id: &str,
+    experiment_id: &str,
+    code: &str,
+    sample_type: &str,
+    display_name: &str,
+    occurred_at: &str,
+    metadata: &Value,
+) -> Result<(), String> {
+    let canonical_type = canonical_sample_type(sample_type);
+    let registered: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sample_types WHERE canonical_type=?1 AND archived_at IS NULL)",
+            [&canonical_type],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !registered {
+        return Err(format!("Sample type {canonical_type} is not registered"));
+    }
+    tx.execute(
+        "INSERT INTO samples (id,workspace_id,experiment_id,sample_code,sample_type,source_record_id,parent_sample_id,display_name,created_at,lineage_status,metadata_json,origin) VALUES (?1,'local',?2,?3,?4,NULL,NULL,?5,?6,'complete',?7,'external')",
+        params![id, experiment_id, code, canonical_type, display_name, occurred_at, metadata.to_string()],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn create_external_inputs(
+    tx: &Transaction<'_>,
+    record_id: &str,
+    experiment_id: &str,
+    experiment_code: &str,
+    task_date: &str,
+    drafts: &[Value],
+) -> Result<Vec<String>, String> {
+    if drafts.len() > 96 {
+        return Err("At most 96 existing Samples can be registered at once".into());
+    }
+    drafts
+        .iter()
+        .enumerate()
+        .map(|(index, draft)| {
+            let sample_type =
+                string_value(draft, "sampleType").ok_or("External Sample type is required")?;
+            let display_name =
+                string_value(draft, "displayName").ok_or("External Sample label is required")?;
+            let code = next_sample_code(tx, experiment_id, experiment_code, sample_type)?;
+            let id = format!("sample-{record_id}-external-{index}");
+            let mut metadata = draft
+                .get("metadata")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            metadata.insert("registered_during_record_id".into(), json!(record_id));
+            insert_external_sample(
+                tx,
+                &id,
+                experiment_id,
+                &code,
+                sample_type,
+                display_name,
+                task_date,
+                &Value::Object(metadata),
+            )?;
+            Ok(id)
+        })
+        .collect()
 }
 
 fn validate_required_fields(spec: &Value, values: &Value) -> Result<(), String> {
@@ -244,28 +310,22 @@ fn resolve_or_create_input(
     };
     let id = format!("sample-{record_id}-source");
     let code = next_sample_code(tx, experiment_id, experiment_code, sample_type)?;
-    insert_sample(
+    let mut metadata = values.as_object().cloned().unwrap_or_default();
+    metadata.insert("registered_during_record_id".into(), json!(record_id));
+    insert_external_sample(
         tx,
         &id,
         experiment_id,
         &code,
         sample_type,
-        record_id,
-        None,
         display_name,
         task_date,
-        values,
+        &Value::Object(metadata),
     )?;
-    let import_event_id = format!("event-{record_id}-import");
-    tx.execute("INSERT INTO process_events (id,experiment_id,record_id,event_type,occurred_at,parameters_json,provenance,created_at) VALUES (?1,?2,?3,'import',?4,?5,'user_imported',?4)", params![import_event_id, experiment_id, record_id, task_date, json!({"displayName":display_name,"sampleType":sample_type}).to_string()]).map_err(|error| error.to_string())?;
-    tx.execute(
-        "INSERT INTO event_outputs VALUES (?1,?2)",
-        params![import_event_id, id],
-    )
-    .map_err(|error| error.to_string())?;
     Ok(Some((id, sample_type.into())))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn execute(
     connection: &mut Connection,
     task_id: &str,
@@ -273,6 +333,26 @@ pub fn execute(
     record_id: &str,
     values: Value,
     supplied_inputs: Vec<String>,
+) -> Result<ExecutionResult, String> {
+    execute_with_external(
+        connection,
+        task_id,
+        protocol_id,
+        record_id,
+        values,
+        supplied_inputs,
+        Vec::new(),
+    )
+}
+
+pub fn execute_with_external(
+    connection: &mut Connection,
+    task_id: &str,
+    protocol_id: &str,
+    record_id: &str,
+    values: Value,
+    supplied_inputs: Vec<String>,
+    external_inputs: Vec<Value>,
 ) -> Result<ExecutionResult, String> {
     let tx = connection
         .transaction()
@@ -307,23 +387,34 @@ pub fn execute(
             .ok_or("Terminal assay requires at least one assay item")?;
         crate::terminal_assay::create_items(&tx, record_id, items)?;
     }
-    let inputs =
-        if execution.get("inputSource").and_then(Value::as_str) == Some("parent_task_outputs") {
-            resolve_parent_task_inputs(&tx, task_id, &experiment_id, execution, &supplied_inputs)?
-        } else {
-            resolve_or_create_input(
-                &tx,
-                record_id,
-                &experiment_id,
-                &experiment_code,
-                task_date,
-                event_type,
-                &values,
-                &supplied_inputs,
-            )?
-            .into_iter()
-            .collect()
-        };
+    let mut selected_inputs = supplied_inputs;
+    selected_inputs.extend(create_external_inputs(
+        &tx,
+        record_id,
+        &experiment_id,
+        &experiment_code,
+        task_date,
+        &external_inputs,
+    )?);
+    let inputs = if matches!(
+        execution.get("inputSource").and_then(Value::as_str),
+        Some("parent_task_outputs" | "experiment_samples")
+    ) {
+        resolve_experiment_inputs(&tx, &experiment_id, execution, &selected_inputs)?
+    } else {
+        resolve_or_create_input(
+            &tx,
+            record_id,
+            &experiment_id,
+            &experiment_code,
+            task_date,
+            event_type,
+            &values,
+            &selected_inputs,
+        )?
+        .into_iter()
+        .collect()
+    };
     let input = inputs.first().cloned();
     let input_ids: Vec<String> = inputs.iter().map(|(id, _)| id.clone()).collect();
     let input_type = input.as_ref().map(|(_, kind)| kind.as_str());
@@ -451,6 +542,11 @@ pub fn execute(
         .get("outputMode")
         .and_then(Value::as_str)
         .unwrap_or("none");
+    if output_mode == "same_sample"
+        && execution.get("consumptionPolicy").and_then(Value::as_str) == Some("consume")
+    {
+        return Err("A consumed Sample cannot continue as the Protocol output".into());
+    }
     let (output_type, output_labels, output_parents): (&str, Vec<String>, Vec<Option<String>>) =
         match output_mode {
             "one" => (
@@ -500,6 +596,32 @@ pub fn execute(
                     input_ids.iter().cloned().map(Some).collect(),
                 )
             }
+            "per_input_count" => {
+                let output_type = execution
+                    .get("outputType")
+                    .and_then(Value::as_str)
+                    .ok_or("outputType is required")?;
+                let count = string_value(&values, "output_count")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .filter(|value| *value > 0 && *value <= 96)
+                    .ok_or("Output count must be 1–96")?;
+                let mut labels = Vec::with_capacity(input_ids.len() * count);
+                let mut parents = Vec::with_capacity(input_ids.len() * count);
+                for id in &input_ids {
+                    let parent_label: String = tx
+                        .query_row(
+                            "SELECT coalesce(display_name,sample_code) FROM samples WHERE id=?1",
+                            [id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|error| error.to_string())?;
+                    for index in 1..=count {
+                        labels.push(format!("{parent_label} · Output {index}"));
+                        parents.push(Some(id.clone()));
+                    }
+                }
+                (output_type, labels, parents)
+            }
             "plate_or_dish" => {
                 let kind =
                     string_value(&values, "container_type").ok_or("Container type is required")?;
@@ -539,9 +661,24 @@ pub fn execute(
                 ],
             ),
             "plate_wells" => ("", Vec::new(), Vec::new()),
+            "same_sample" => ("", Vec::new(), Vec::new()),
             "none" => ("", Vec::new(), Vec::new()),
             _ => return Err("Unsupported Protocol output mode".into()),
         };
+    if !output_type.is_empty() {
+        let registered: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sample_types WHERE canonical_type=upper(?1) AND archived_at IS NULL)",
+                [output_type],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !registered {
+            return Err(format!(
+                "Output Sample type {output_type} is not registered"
+            ));
+        }
+    }
     let mut output_ids = Vec::new();
     for (index, label) in output_labels.iter().enumerate() {
         let id = format!("sample-{record_id}-{index}");
@@ -562,10 +699,15 @@ pub fn execute(
         } else {
             Map::new()
         };
-        metadata.extend(values.as_object().cloned().unwrap_or_else(Map::new));
+        if execution.get("engine").and_then(Value::as_str) != Some("sample_flow_v1") {
+            metadata.extend(values.as_object().cloned().unwrap_or_else(Map::new));
+        }
         if let Some(parent) = parent_id {
             metadata.insert("source_sample_id".into(), json!(parent));
         }
+        metadata.insert("source_record_id".into(), json!(record_id));
+        metadata.insert("source_protocol_id".into(), json!(protocol_id));
+        metadata.insert("source_protocol_version".into(), json!(version));
         if output_type == "PLATE" {
             let capacity = string_value(&values, "plate_format")
                 .and_then(crate::plate_layout::supported_capacity)
@@ -611,7 +753,22 @@ pub fn execute(
         .map_err(|error| error.to_string())?;
         output_ids.push(id);
     }
-    if output_ids.is_empty() && spec.get("terminalAssay").is_none() {
+    if output_mode == "same_sample" {
+        for id in &input_ids {
+            tx.execute(
+                "INSERT INTO event_outputs VALUES (?1,?2)",
+                params![event_id, id],
+            )
+            .map_err(|error| error.to_string())?;
+            tx.execute(
+                "INSERT INTO record_samples VALUES (?1,?2,'output')",
+                params![record_id, id],
+            )
+            .map_err(|error| error.to_string())?;
+            output_ids.push(id.clone());
+        }
+    } else if output_ids.is_empty() && spec.get("terminalAssay").is_none() && output_mode != "none"
+    {
         if let Some((id, _)) = &input {
             tx.execute(
                 "INSERT INTO event_outputs VALUES (?1,?2)",
@@ -620,6 +777,17 @@ pub fn execute(
             .map_err(|error| error.to_string())?;
         }
     }
+    let output_summary = output_ids
+        .iter()
+        .map(|id| {
+            tx.query_row("SELECT sample_code FROM samples WHERE id=?1", [id], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join("、");
+    rendered = rendered.replace("{{output_sample_summary}}", &output_summary);
     let mut result_ids = Vec::new();
     for (index, result_type) in execution
         .get("resultTypes")
@@ -925,14 +1093,23 @@ mod tests {
         assert_eq!(passage.input_ids.len(), 1);
         assert!(passage.rendered_content.contains("1000 rpm，离心5 min"));
         assert!(passage.rendered_content.contains("直接传代法"));
-        let provenance: String = db
+        let (origin, source_record): (String, Option<String>) = db
             .query_row(
-                "SELECT provenance FROM process_events WHERE id='event-r-passage-new-import'",
+                "SELECT origin,source_record_id FROM samples WHERE id=?1",
+                [&passage.input_ids[0]],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(origin, "external");
+        assert!(source_record.is_none());
+        let fake_imports: i64 = db
+            .query_row(
+                "SELECT count(*) FROM process_events WHERE id='event-r-passage-new-import'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(provenance, "user_imported");
+        assert_eq!(fake_imports, 0);
         task(&db, "dish");
         let dish = execute(
             &mut db,
@@ -1073,6 +1250,111 @@ mod tests {
                 .unwrap();
             assert_eq!(versions, 1);
         }
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn root_task_can_register_external_inputs_without_fake_import_event() {
+        let (mut db, path) = database();
+        task(&db, "root-rna");
+        let result = execute_with_external(
+            &mut db,
+            "root-rna",
+            "pro-rna",
+            "root-rna-record",
+            json!({"resuspension_volume":"20","storage":"立即逆转录"}),
+            vec![],
+            vec![
+                json!({"sampleType":"CELL","displayName":"siNC","metadata":{"existing_conditions":"siNC, 24 h"}}),
+                json!({"sampleType":"CELL","displayName":"siARH","metadata":{"existing_conditions":"siARH, 24 h"}}),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(result.input_ids.len(), 2);
+        assert_eq!(result.output_ids.len(), 2);
+        for input_id in &result.input_ids {
+            let (origin, source_record, parent): (String, Option<String>, Option<String>) = db
+                .query_row(
+                    "SELECT origin,source_record_id,parent_sample_id FROM samples WHERE id=?1",
+                    [input_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(origin, "external");
+            assert!(source_record.is_none());
+            assert!(parent.is_none());
+        }
+        let fake_imports: i64 = db
+            .query_row(
+                "SELECT count(*) FROM process_events WHERE provenance='user_imported'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let task_relations: i64 = db
+            .query_row("SELECT count(*) FROM task_relations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!((fake_imports, task_relations), (0, 0));
+        for (index, output_id) in result.output_ids.iter().enumerate() {
+            let (origin, parent): (String, String) = db
+                .query_row(
+                    "SELECT origin,parent_sample_id FROM samples WHERE id=?1",
+                    [output_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(origin, "internal");
+            assert_eq!(parent, result.input_ids[index]);
+        }
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn experiment_sample_input_is_independent_of_task_relations_and_rolls_back() {
+        let (mut db, path) = database();
+        task(&db, "root-rna");
+        db.execute("INSERT INTO samples (id,experiment_id,sample_code,sample_type,display_name,created_at,lineage_status,metadata_json,origin) VALUES ('existing-cell','exp','EXP900-CELL01','CELL','Existing cell','now','complete','{}','external')", []).unwrap();
+        let result = execute(
+            &mut db,
+            "root-rna",
+            "pro-rna",
+            "root-rna-record",
+            json!({"resuspension_volume":"20","storage":"立即逆转录"}),
+            vec!["existing-cell".into()],
+        )
+        .unwrap();
+        assert_eq!(result.input_ids, vec!["existing-cell"]);
+
+        task(&db, "invalid-root-rna");
+        let error = execute_with_external(
+            &mut db,
+            "invalid-root-rna",
+            "pro-rna",
+            "invalid-root-rna-record",
+            json!({"resuspension_volume":"20","storage":"立即逆转录"}),
+            vec![],
+            vec![json!({"sampleType":"RNA","displayName":"Wrong type"})],
+        )
+        .unwrap_err();
+        assert!(error.contains("does not accept RNA"));
+        let leftovers: (i64, i64) = (
+            db.query_row(
+                "SELECT count(*) FROM records WHERE id='invalid-root-rna-record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            db.query_row(
+                "SELECT count(*) FROM samples WHERE id LIKE 'sample-invalid-root-rna-record-external-%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(leftovers, (0, 0));
         drop(db);
         fs::remove_file(path).unwrap();
     }
@@ -1351,6 +1633,129 @@ mod tests {
             )
             .unwrap();
         assert_eq!(terminal_state, (0, 3, 0));
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn generic_sample_flow_inherits_parent_metadata_without_copying_record_fields() {
+        let (mut db, path) = database();
+        upstream_samples(
+            &db,
+            "custom-task",
+            &[("rna-custom", "RNA", r#"{"group":"siNC","time":"24h"}"#)],
+        );
+        db.execute("INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES ('custom-rt','Custom RT','自定义',1,'#000','','user')", []).unwrap();
+        db.execute(
+            "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES ('custom-rt',1,?1,'user','now')",
+            [json!({
+                "schemaVersion":1,
+                "fields":[{"key":"operator_note","label":"Note","kind":"text"}],
+                "template":"日期：{{date}}\n输入：{{input_sample_summary}}\n输出：{{output_sample_summary}}\n{{operator_note}}",
+                "execution":{"engine":"sample_flow_v1","eventType":"custom:rt","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["RNA"],"outputType":"CDNA","outputMode":"per_input","consumptionPolicy":"consume","metadataPolicy":"inherit_parent"}
+            }).to_string()],
+        ).unwrap();
+        let result = execute(
+            &mut db,
+            "custom-task",
+            "custom-rt",
+            "custom-record",
+            json!({"operator_note":"kept only in Record"}),
+            vec!["rna-custom".into()],
+        )
+        .unwrap();
+        let metadata_json: String = db
+            .query_row(
+                "SELECT metadata_json FROM samples WHERE id=?1",
+                [&result.output_ids[0]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let metadata: Value = serde_json::from_str(&metadata_json).unwrap();
+        assert_eq!(metadata["group"], "siNC");
+        assert_eq!(metadata["time"], "24h");
+        assert!(metadata.get("operator_note").is_none());
+        assert_eq!(metadata["source_sample_id"], "rna-custom");
+        assert_eq!(metadata["source_protocol_id"], "custom-rt");
+        assert!(result.rendered_content.contains("EXP900-RNA"));
+        assert!(result.rendered_content.contains("EXP900-cDNA01"));
+        let consumed: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sample_usages WHERE sample_id='rna-custom' AND usage_type='consumed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(consumed, 1);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn generic_multiple_and_measurement_flows_preserve_lineage_semantics() {
+        let (mut db, path) = database();
+        upstream_samples(&db, "multiple-task", &[("cell-custom", "CELL", "{}")]);
+        db.execute(
+            "INSERT INTO sample_types VALUES ('TISSUE','Tissue','user','now',NULL)",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES ('custom-multiple','Split','自定义',1,'#000','','user')", []).unwrap();
+        db.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES ('custom-multiple',1,?1,'user','now')", [json!({"fields":[{"key":"output_count","label":"Count","kind":"number","required":true}],"template":"{{input_sample_summary}} -> {{output_sample_summary}}","execution":{"engine":"sample_flow_v1","eventType":"custom:split","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CELL"],"outputType":"TISSUE","outputMode":"per_input_count","consumptionPolicy":"non_destructive"}}).to_string()]).unwrap();
+        let split = execute(
+            &mut db,
+            "multiple-task",
+            "custom-multiple",
+            "multiple-record",
+            json!({"output_count":"3"}),
+            vec!["cell-custom".into()],
+        )
+        .unwrap();
+        assert_eq!(split.output_ids.len(), 3);
+        let inherited: i64 = db.query_row("SELECT count(*) FROM samples WHERE source_record_id='multiple-record' AND parent_sample_id='cell-custom' AND sample_type='TISSUE'",[],|row|row.get(0)).unwrap();
+        assert_eq!(inherited, 3);
+
+        task(&db, "measurement-task");
+        db.execute("INSERT INTO task_relations (id,experiment_id,parent_task_id,child_task_id,relation_type,created_at) VALUES ('rel-measure','exp','source-task','measurement-task','depends_on','now')", []).unwrap();
+        db.execute("INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES ('custom-measure','Measure','自定义',1,'#000','','user')", []).unwrap();
+        db.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES ('custom-measure',1,?1,'user','now')", [json!({"fields":[],"template":"Measurement {{input_sample_summary}}","execution":{"engine":"sample_flow_v1","eventType":"custom:measure","inputSource":"parent_task_outputs","inputCardinality":"many","inputTypes":["CELL"],"outputMode":"none","consumptionPolicy":"non_destructive"}}).to_string()]).unwrap();
+        let measured = execute(
+            &mut db,
+            "measurement-task",
+            "custom-measure",
+            "measurement-record",
+            json!({}),
+            vec!["cell-custom".into()],
+        )
+        .unwrap();
+        assert!(measured.output_ids.is_empty());
+        let event_outputs: i64 = db
+            .query_row(
+                "SELECT count(*) FROM event_outputs WHERE event_id='event-measurement-record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_outputs, 0);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn user_activated_builtin_template_version_survives_restart_catalog_sync() {
+        let (db, path) = database();
+        db.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES ('pro-rt',2,'{\"schemaVersion\":2,\"template\":\"User text\"}','user','now')", []).unwrap();
+        db.execute(
+            "UPDATE protocols SET active_version=2 WHERE id='pro-rt'",
+            [],
+        )
+        .unwrap();
+        crate::ensure_builtin_protocols(&db).unwrap();
+        let (active, origin, template): (i64, String, String) = db.query_row("SELECT p.active_version,pv.origin,json_extract(pv.schema_json,'$.template') FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version WHERE p.id='pro-rt'",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+        assert_eq!(
+            (active, origin.as_str(), template.as_str()),
+            (2, "user", "User text")
+        );
         drop(db);
         fs::remove_file(path).unwrap();
     }

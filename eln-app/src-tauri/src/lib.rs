@@ -13,6 +13,7 @@ mod protocol_catalog;
 mod protocol_execution;
 mod task_graph;
 mod terminal_assay;
+mod workspace_backup;
 
 struct DatabaseState(Mutex<Connection>);
 
@@ -59,10 +60,10 @@ fn ensure_builtin_protocols(connection: &Connection) -> Result<(), String> {
             )
             .ok();
         if exists.is_none() {
-            connection.execute("INSERT INTO protocols (id,name,category,active_version,accent) VALUES (?1,?2,?3,1,?4)",params![id,builtin.name,builtin.category,builtin.accent]).map_err(|e|e.to_string())?;
-            connection.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json) VALUES (?1,1,?2)",params![id,schema]).map_err(|e|e.to_string())?;
+            connection.execute("INSERT INTO protocols (id,name,category,active_version,accent,origin) VALUES (?1,?2,?3,1,?4,'builtin')",params![id,builtin.name,builtin.category,builtin.accent]).map_err(|e|e.to_string())?;
+            connection.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?1,1,?2,'builtin',datetime('now'))",params![id,schema]).map_err(|e|e.to_string())?;
         } else {
-            let latest: String = connection.query_row("SELECT pv.schema_json FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version WHERE p.id=?1",[id],|row|row.get(0)).map_err(|e|e.to_string())?;
+            let latest: String = connection.query_row("SELECT schema_json FROM protocol_versions WHERE protocol_id=?1 AND origin='builtin' ORDER BY version_number DESC LIMIT 1",[id],|row|row.get(0)).map_err(|e|e.to_string())?;
             let active_schema_version = serde_json::from_str::<Value>(&latest)
                 .ok()
                 .and_then(|schema| schema.get("schemaVersion").and_then(Value::as_i64))
@@ -75,13 +76,16 @@ fn ensure_builtin_protocols(connection: &Connection) -> Result<(), String> {
                         |row| row.get(0),
                     )
                     .map_err(|error| error.to_string())?;
-                connection.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json) VALUES (?1,?2,?3)",params![id,next,schema]).map_err(|e|e.to_string())?;
-                connection
-                    .execute(
-                        "UPDATE protocols SET active_version=?2 WHERE id=?1",
-                        params![id, next],
-                    )
-                    .map_err(|e| e.to_string())?;
+                connection.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?1,?2,?3,'builtin',datetime('now'))",params![id,next,schema]).map_err(|e|e.to_string())?;
+                let active_origin: String = connection.query_row("SELECT pv.origin FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version WHERE p.id=?1",[id],|row|row.get(0)).map_err(|e|e.to_string())?;
+                if active_origin == "builtin" {
+                    connection
+                        .execute(
+                            "UPDATE protocols SET active_version=?2 WHERE id=?1",
+                            params![id, next],
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
     }
@@ -134,15 +138,62 @@ fn apply_schema(connection: &Connection) -> Result<(), String> {
     ensure_column(connection, "samples", "archived_at", "archived_at TEXT")?;
     ensure_column(
         connection,
+        "samples",
+        "origin",
+        "origin TEXT NOT NULL DEFAULT 'internal' CHECK(origin IN ('internal','external'))",
+    )?;
+    ensure_column(
+        connection,
         "process_events",
         "archived_at",
         "archived_at TEXT",
     )?;
     ensure_column(connection, "tasks", "created_at", "created_at TEXT")?;
     ensure_column(connection, "tasks", "updated_at", "updated_at TEXT")?;
+    ensure_column(
+        connection,
+        "protocols",
+        "description",
+        "description TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        connection,
+        "protocols",
+        "origin",
+        "origin TEXT NOT NULL DEFAULT 'builtin'",
+    )?;
+    ensure_column(
+        connection,
+        "protocol_versions",
+        "origin",
+        "origin TEXT NOT NULL DEFAULT 'builtin'",
+    )?;
+    ensure_column(
+        connection,
+        "protocol_versions",
+        "created_at",
+        "created_at TEXT",
+    )?;
     connection
         .execute("UPDATE samples SET sample_type=upper(sample_type)", [])
         .map_err(|error| error.to_string())?;
+    for (canonical_type, display_name) in [
+        ("CELL", "CELL"),
+        ("PLATE", "PLATE"),
+        ("DISH", "DISH"),
+        ("WELL", "WELL"),
+        ("RNA", "RNA"),
+        ("CDNA", "cDNA"),
+        ("PROTEIN", "PROTEIN"),
+        ("SUP", "SUP"),
+    ] {
+        connection.execute(
+            "INSERT OR IGNORE INTO sample_types (canonical_type,display_name,origin,created_at) VALUES (?1,?2,'builtin',datetime('now'))",
+            params![canonical_type, display_name],
+        ).map_err(|error| error.to_string())?;
+    }
+    connection.execute("INSERT OR IGNORE INTO sample_types (canonical_type,display_name,origin,created_at) SELECT DISTINCT upper(sample_type), upper(sample_type), 'user', datetime('now') FROM samples", []).map_err(|error| error.to_string())?;
+    connection.execute_batch("UPDATE samples SET origin='external' WHERE id IN (SELECT output.sample_id FROM process_events event JOIN event_outputs output ON output.event_id=event.id WHERE event.provenance='user_imported'); UPDATE samples SET origin='external' WHERE source_record_id IS NULL AND parent_sample_id IS NULL AND NOT EXISTS (SELECT 1 FROM event_outputs output JOIN process_events event ON event.id=output.event_id WHERE output.sample_id=samples.id AND event.provenance='labflow_recorded');").map_err(|error| error.to_string())?;
     connection.execute_batch("UPDATE samples SET lineage_status='partial' WHERE id IN (SELECT eo.sample_id FROM process_events event JOIN event_outputs eo ON eo.event_id=event.id JOIN samples output ON output.id=eo.sample_id WHERE (event.event_type IN ('passage','plating') AND NOT EXISTS (SELECT 1 FROM event_inputs WHERE event_id=event.id)) OR (event.event_type='treatment' AND upper(output.sample_type)='WELL' AND NOT EXISTS (SELECT 1 FROM event_inputs input JOIN samples source ON source.id=input.sample_id WHERE input.event_id=event.id AND upper(source.sample_type)='PLATE')));").map_err(|error| error.to_string())?;
     connection.execute_batch("INSERT OR IGNORE INTO sample_usages (event_id,sample_id,usage_type,created_at) SELECT event.id,input.sample_id,'consumed',event.created_at FROM process_events event JOIN event_inputs input ON input.event_id=event.id WHERE event.event_type='passage' AND NOT EXISTS (SELECT 1 FROM sample_usages usage WHERE usage.event_id=event.id AND usage.sample_id=input.sample_id);").map_err(|error| error.to_string())?;
     Ok(())
@@ -507,14 +558,20 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
         tasks.push(row.map_err(|e| e.to_string())?)
     }
     let mut protocols = Vec::new();
-    let mut statement = connection.prepare("SELECT p.id, p.name, p.category, p.active_version, p.accent, pv.schema_json FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| { let schema: String = row.get(5)?; let spec: Value = serde_json::from_str::<Value>(&schema).unwrap_or(json!({"blocks":[]})); Ok(json!({"id":row.get::<_,String>(0)? ,"name":row.get::<_,String>(1)? ,"category":row.get::<_,String>(2)? ,"version":row.get::<_,i64>(3)? ,"accent":row.get::<_,String>(4)? ,"blocks":spec["blocks"],"fields":spec["fields"],"template":spec["template"],"templateSelector":spec["templateSelector"],"templateVariants":spec["templateVariants"],"execution":spec["execution"],"terminalAssay":spec["terminalAssay"]})) }).map_err(|e| e.to_string())?;
+    let mut statement = connection.prepare("SELECT p.id, p.name, p.category, p.active_version, p.accent, pv.schema_json, p.description, p.origin, pv.origin FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version").map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| { let schema: String = row.get(5)?; let spec: Value = serde_json::from_str::<Value>(&schema).unwrap_or(json!({"blocks":[]})); Ok(json!({"id":row.get::<_,String>(0)? ,"name":row.get::<_,String>(1)? ,"category":row.get::<_,String>(2)? ,"version":row.get::<_,i64>(3)? ,"accent":row.get::<_,String>(4)? ,"description":row.get::<_,String>(6)?,"origin":row.get::<_,String>(7)?,"activeVersionOrigin":row.get::<_,String>(8)?,"blocks":spec["blocks"],"fields":spec["fields"],"template":spec["template"],"templateSelector":spec["templateSelector"],"templateVariants":spec["templateVariants"],"execution":spec["execution"],"terminalAssay":spec["terminalAssay"]})) }).map_err(|e| e.to_string())?;
     for row in rows {
         protocols.push(row.map_err(|e| e.to_string())?)
     }
+    let mut sample_types = Vec::new();
+    let mut statement = connection.prepare("SELECT canonical_type,display_name,origin FROM sample_types WHERE archived_at IS NULL ORDER BY display_name,canonical_type").map_err(|e|e.to_string())?;
+    let rows = statement.query_map([], |row| Ok(json!({"canonicalType":row.get::<_,String>(0)?,"displayName":row.get::<_,String>(1)?,"origin":row.get::<_,String>(2)?}))).map_err(|e|e.to_string())?;
+    for row in rows {
+        sample_types.push(row.map_err(|e| e.to_string())?);
+    }
     let mut samples = Vec::new();
-    let mut statement = connection.prepare("SELECT s.id, s.experiment_id, s.sample_code, s.sample_type, s.source_record_id, coalesce(s.parent_sample_id,(SELECT ei.sample_id FROM event_outputs eo JOIN event_inputs ei ON ei.event_id=eo.event_id WHERE eo.sample_id=s.id AND ei.sample_id<>s.id LIMIT 1)), s.display_name, s.metadata_json, s.lineage_status, EXISTS(SELECT 1 FROM sample_usages usage WHERE usage.sample_id=s.id AND usage.usage_type='consumed') FROM samples s WHERE s.archived_at IS NULL").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| { let metadata:String=row.get(7)?; Ok(json!({"id":row.get::<_,String>(0)?,"experimentId":row.get::<_,String>(1)?,"code":row.get::<_,String>(2)?,"type":row.get::<_,String>(3)?,"source":row.get::<_,Option<String>>(4)?,"parent":row.get::<_,Option<String>>(5)?,"displayName":row.get::<_,Option<String>>(6)?,"metadata":serde_json::from_str::<Value>(&metadata).unwrap_or(json!({})),"lineageStatus":row.get::<_,String>(8)?,"consumed":row.get::<_,bool>(9)?})) }).map_err(|e| e.to_string())?;
+    let mut statement = connection.prepare("SELECT s.id, s.experiment_id, s.sample_code, s.sample_type, s.source_record_id, coalesce(s.parent_sample_id,(SELECT ei.sample_id FROM event_outputs eo JOIN event_inputs ei ON ei.event_id=eo.event_id WHERE eo.sample_id=s.id AND ei.sample_id<>s.id LIMIT 1)), s.display_name, s.metadata_json, s.lineage_status, EXISTS(SELECT 1 FROM sample_usages usage WHERE usage.sample_id=s.id AND usage.usage_type='consumed'), s.origin FROM samples s WHERE s.archived_at IS NULL").map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| { let metadata:String=row.get(7)?; Ok(json!({"id":row.get::<_,String>(0)?,"experimentId":row.get::<_,String>(1)?,"code":row.get::<_,String>(2)?,"type":row.get::<_,String>(3)?,"source":row.get::<_,Option<String>>(4)?,"parent":row.get::<_,Option<String>>(5)?,"displayName":row.get::<_,Option<String>>(6)?,"metadata":serde_json::from_str::<Value>(&metadata).unwrap_or(json!({})),"lineageStatus":row.get::<_,String>(8)?,"consumed":row.get::<_,bool>(9)?,"origin":row.get::<_,String>(10)?})) }).map_err(|e| e.to_string())?;
     for row in rows {
         samples.push(row.map_err(|e| e.to_string())?)
     }
@@ -581,7 +638,7 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
         records.push(json!({"id":id,"taskId":task_id,"experimentId":experiment_id,"protocolId":protocol_id,"title":current["title"],"updated":updated,"notes":current["notes"],"inputs":inputs,"outputs":outputs,"results":results,"attachments":attachments,"history":history,"renderedContent":current["renderedContent"],"analysisSections":current["analysisSections"],"values":current["values"],"protocolVersion":snapshot["version"]}));
     }
     Ok(
-        json!({"experiments":experiments,"tasks":tasks,"protocols":protocols,"samples":samples,"records":records}),
+        json!({"experiments":experiments,"tasks":tasks,"protocols":protocols,"sampleTypes":sample_types,"samples":samples,"records":records}),
     )
 }
 
@@ -641,23 +698,26 @@ fn write_store(connection: &mut Connection, store: Value) -> Result<(), String> 
         let blocks = item.get("blocks").cloned().unwrap_or(json!([]));
         transaction
             .execute(
-                "INSERT INTO protocols VALUES (?1,?2,?3,?4,?5)",
+                "INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES (?1,?2,?3,?4,?5,?6,?7)",
                 params![
                     value_string(item, "id")?,
                     value_string(item, "name")?,
                     value_string(item, "category")?,
                     item.get("version").and_then(Value::as_i64).unwrap_or(1),
-                    value_string(item, "accent")?
+                    value_string(item, "accent")?,
+                    item.get("description").and_then(Value::as_str).unwrap_or(""),
+                    item.get("origin").and_then(Value::as_str).unwrap_or("builtin")
                 ],
             )
             .map_err(|e| e.to_string())?;
         transaction
             .execute(
-                "INSERT INTO protocol_versions VALUES (?1,?2,?3)",
+                "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?1,?2,?3,?4,datetime('now'))",
                 params![
                     value_string(item, "id")?,
                     item.get("version").and_then(Value::as_i64).unwrap_or(1),
-                    json!({"blocks":blocks}).to_string()
+                    json!({"blocks":blocks}).to_string(),
+                    item.get("activeVersionOrigin").and_then(Value::as_str).unwrap_or("builtin")
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -912,6 +972,203 @@ fn delete_task(state: State<DatabaseState>, id: String) -> Result<(), String> {
     transaction.commit().map_err(|error| error.to_string())
 }
 
+fn delete_record_from_db(
+    connection: &mut Connection,
+    files_dir: &Path,
+    id: &str,
+) -> Result<(), String> {
+    let exported: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM export_manifests manifest, json_each(manifest.record_ids_json) item WHERE item.value=?1)",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if exported {
+        return Err("This Record is included in an export manifest and cannot be deleted.".into());
+    }
+    let has_downstream: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM samples output
+               WHERE output.source_record_id=?1 AND (
+                 EXISTS(SELECT 1 FROM record_samples link WHERE link.sample_id=output.id AND link.record_id<>?1)
+                 OR EXISTS(SELECT 1 FROM event_inputs input JOIN process_events event ON event.id=input.event_id WHERE input.sample_id=output.id AND (event.record_id IS NULL OR event.record_id<>?1))
+                 OR EXISTS(SELECT 1 FROM sample_relations relation JOIN samples child ON child.id=relation.child_sample_id WHERE relation.parent_sample_id=output.id AND (child.source_record_id IS NULL OR child.source_record_id<>?1))
+                 OR EXISTS(SELECT 1 FROM assay_well_mappings mapping JOIN assay_plates plate ON plate.id=mapping.plate_id WHERE mapping.sample_id=output.id AND plate.record_id<>?1)
+                 OR EXISTS(SELECT 1 FROM qpcr_plate_wells legacy WHERE legacy.source_cdna_sample_id=output.id)
+               )
+             )",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if has_downstream {
+        return Err(
+            "This Record has output Samples used by downstream data and cannot be deleted.".into(),
+        );
+    }
+    let attachment_ids = {
+        let mut statement = connection
+            .prepare("SELECT id FROM attachments WHERE record_id=?1")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([id], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .map(|row| row.map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let task_id: String = transaction
+        .query_row("SELECT task_id FROM records WHERE id=?1", [id], |row| {
+            row.get(0)
+        })
+        .map_err(|_| "Record not found".to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM qpcr_delta_delta_ct_analyses WHERE record_id=?1",
+            [id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM qpcr_delta_ct_analyses WHERE record_id=?1",
+            [id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.execute("DELETE FROM assay_raw_measurements WHERE import_id IN (SELECT id FROM assay_raw_imports WHERE record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction
+        .execute("DELETE FROM assay_raw_imports WHERE record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction.execute("DELETE FROM assay_well_mappings WHERE plate_id IN (SELECT id FROM assay_plates WHERE record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction
+        .execute("DELETE FROM assay_plates WHERE record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM assay_items WHERE record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction.execute("DELETE FROM sample_usages WHERE event_id IN (SELECT id FROM process_events WHERE record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction.execute("DELETE FROM event_inputs WHERE event_id IN (SELECT id FROM process_events WHERE record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction.execute("DELETE FROM event_outputs WHERE event_id IN (SELECT id FROM process_events WHERE record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction
+        .execute("DELETE FROM process_events WHERE record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction.execute("DELETE FROM sample_aliases WHERE sample_id IN (SELECT id FROM samples WHERE source_record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction.execute("DELETE FROM sample_locations WHERE sample_id IN (SELECT id FROM samples WHERE source_record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction.execute("DELETE FROM sample_relations WHERE parent_sample_id IN (SELECT id FROM samples WHERE source_record_id=?1) OR child_sample_id IN (SELECT id FROM samples WHERE source_record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction.execute("DELETE FROM record_samples WHERE record_id=?1 OR sample_id IN (SELECT id FROM samples WHERE source_record_id=?1)", [id]).map_err(|error|error.to_string())?;
+    transaction
+        .execute("DELETE FROM samples WHERE source_record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM results WHERE record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM attachments WHERE record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM record_changes WHERE record_id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction.execute("UPDATE tasks SET record_id=NULL,status='planned',updated_at=datetime('now') WHERE id=?1 AND record_id=?2", params![task_id,id]).map_err(|error|error.to_string())?;
+    transaction
+        .execute("DELETE FROM records WHERE id=?1", [id])
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    for attachment_id in attachment_ids {
+        let directory = files_dir.join(attachment_id);
+        if directory.exists() {
+            fs::remove_dir_all(directory).map_err(|error| {
+                format!(
+                    "Record was deleted, but an attachment directory could not be removed: {error}"
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_record(app: AppHandle, state: State<DatabaseState>, id: String) -> Result<(), String> {
+    let mut connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    delete_record_from_db(&mut connection, &attachments_dir(&app)?, &id)
+}
+
+fn update_record_body_in_db(
+    connection: &mut Connection,
+    id: &str,
+    rendered_content: &str,
+    change_id: &str,
+    changed_at: &str,
+) -> Result<(), String> {
+    if rendered_content.trim().is_empty() {
+        return Err("Record body cannot be empty.".into());
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let current_json: String = transaction
+        .query_row(
+            "SELECT current_data_json FROM records WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "Record not found".to_string())?;
+    let mut current: Value =
+        serde_json::from_str(&current_json).map_err(|error| error.to_string())?;
+    if !current.is_object() {
+        return Err("Record data is invalid.".into());
+    }
+    let old_content = current
+        .get("renderedContent")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let new_content = json!(rendered_content);
+    if old_content == new_content {
+        return Ok(());
+    }
+    current["renderedContent"] = new_content.clone();
+    transaction
+        .execute(
+            "UPDATE records SET current_data_json=?2,updated_at=?3 WHERE id=?1",
+            params![id, current.to_string(), changed_at],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT INTO record_changes (id,record_id,field_path,old_value_json,new_value_json,actor_id,changed_at) VALUES (?1,?2,'renderedContent',?3,?4,'local_user',?5)",
+            params![change_id, id, old_content.to_string(), new_content.to_string(), changed_at],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_record_body(
+    state: State<DatabaseState>,
+    id: String,
+    rendered_content: String,
+    change_id: String,
+    changed_at: String,
+) -> Result<(), String> {
+    let mut connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    update_record_body_in_db(
+        &mut connection,
+        &id,
+        &rendered_content,
+        &change_id,
+        &changed_at,
+    )
+}
+
 #[tauri::command]
 fn update_task_status(
     state: State<DatabaseState>,
@@ -939,6 +1196,242 @@ fn update_task_status(
     Ok(task)
 }
 
+fn canonical_protocol_sample_type(value: &str) -> Result<String, String> {
+    let canonical = value.trim().to_uppercase();
+    if canonical.is_empty()
+        || canonical.len() > 32
+        || !canonical.chars().enumerate().all(|(index, character)| {
+            character.is_ascii_uppercase()
+                || character.is_ascii_digit() && index > 0
+                || character == '_' && index > 0
+        })
+    {
+        return Err("Sample type must use 1–32 letters, numbers, or underscores".into());
+    }
+    Ok(canonical)
+}
+
+fn validate_protocol_template(template: &str, spec: &Value) -> Result<(), String> {
+    if template.trim().is_empty() {
+        return Err("Record template cannot be empty".into());
+    }
+    let mut allowed = vec![
+        "date".to_string(),
+        "input_sample_summary".to_string(),
+        "output_sample_summary".to_string(),
+        "plate_layout_summary".to_string(),
+    ];
+    for field in spec
+        .get("fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(key) = field.get("key").and_then(Value::as_str) {
+            allowed.push(key.to_owned());
+        }
+    }
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let end = after
+            .find("}}")
+            .ok_or("Record template contains an unclosed placeholder")?;
+        let key = after[..end].trim();
+        if !allowed.iter().any(|candidate| candidate == key) {
+            return Err(format!("Unknown Record template placeholder: {key}"));
+        }
+        rest = &after[end + 2..];
+    }
+    Ok(())
+}
+
+fn register_sample_type(
+    tx: &rusqlite::Transaction<'_>,
+    canonical_type: &str,
+    display_name: &str,
+    created_at: &str,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT OR IGNORE INTO sample_types (canonical_type,display_name,origin,created_at) VALUES (?1,?2,'user',?3)",
+        params![canonical_type, display_name.trim(), created_at],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn save_user_protocol(state: State<DatabaseState>, request: Value) -> Result<Value, String> {
+    let mut conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    save_user_protocol_to_db(&mut conn, request)
+}
+
+fn save_user_protocol_to_db(conn: &mut Connection, request: Value) -> Result<Value, String> {
+    let id = value_string(&request, "id")?;
+    let name = value_string(&request, "name")?;
+    let description = value_string(&request, "description")?;
+    let input_type = canonical_protocol_sample_type(&value_string(&request, "inputType")?)?;
+    let input_display = request
+        .get("inputTypeDisplayName")
+        .and_then(Value::as_str)
+        .unwrap_or(&input_type)
+        .trim();
+    let output_behavior = value_string(&request, "outputBehavior")?;
+    let output_mode = match output_behavior.as_str() {
+        "same_sample" => "same_sample",
+        "derived_one" => "per_input",
+        "derived_multiple" => "per_input_count",
+        "measurement_only" => "none",
+        _ => return Err("Unsupported Sample output behavior".into()),
+    };
+    let consumption_policy = match value_string(&request, "consumptionPolicy")?.as_str() {
+        "retain" => "non_destructive",
+        "consume" => "consume",
+        _ => return Err("Unsupported input Sample policy".into()),
+    };
+    if output_mode == "same_sample" && consumption_policy == "consume" {
+        return Err("A consumed Sample cannot continue as the output".into());
+    }
+    let output_type = if matches!(output_mode, "per_input" | "per_input_count") {
+        Some(canonical_protocol_sample_type(&value_string(
+            &request,
+            "outputType",
+        )?)?)
+    } else {
+        None
+    };
+    let template = value_string(&request, "template")?;
+    let created_at = value_string(&request, "createdAt")?;
+    let fields = if output_mode == "per_input_count" {
+        json!([{"key":"output_count","label":"每个输入产生数量","kind":"number","required":true,"defaultValue":"2"}])
+    } else {
+        json!([])
+    };
+    let mut execution = json!({
+        "engine":"sample_flow_v1",
+        "eventType":format!("custom:{id}"),
+        "inputSource":"experiment_samples",
+        "inputCardinality":"many",
+        "inputTypes":[input_type],
+        "outputMode":output_mode,
+        "consumptionPolicy":consumption_policy,
+        "metadataPolicy":"inherit_parent"
+    });
+    if let Some(output_type) = &output_type {
+        execution["outputType"] = json!(output_type);
+    }
+    let spec = json!({
+        "schemaVersion":1,
+        "userDefined":true,
+        "blocks":["选择输入 Sample", "按模板记录实验过程", match output_mode { "same_sample" => "原 Sample 继续", "per_input" => "每个输入产生一个新 Sample", "per_input_count" => "每个输入产生多个新 Sample", _ => "仅记录检测，不产生 Sample" }],
+        "fields":fields,
+        "template":template,
+        "execution":execution
+    });
+    validate_protocol_template(spec["template"].as_str().unwrap_or(""), &spec)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM protocols WHERE id=?1)",
+            [&id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if exists {
+        return Err("Protocol id already exists".into());
+    }
+    register_sample_type(&tx, &input_type, input_display, &created_at)?;
+    if let Some(output_type) = &output_type {
+        let output_display = request
+            .get("outputTypeDisplayName")
+            .and_then(Value::as_str)
+            .unwrap_or(output_type);
+        register_sample_type(&tx, output_type, output_display, &created_at)?;
+    }
+    tx.execute(
+        "INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES (?1,?2,?3,1,?4,?5,'user')",
+        params![id, name.trim(), request.get("category").and_then(Value::as_str).unwrap_or("自定义"), request.get("accent").and_then(Value::as_str).unwrap_or("#6957e8"), description.trim()],
+    ).map_err(|error|error.to_string())?;
+    tx.execute(
+        "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?1,1,?2,'user',?3)",
+        params![id, spec.to_string(), created_at],
+    ).map_err(|error|error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(json!({"id":id,"version":1}))
+}
+
+#[tauri::command]
+fn save_protocol_template_version(
+    state: State<DatabaseState>,
+    request: Value,
+) -> Result<Value, String> {
+    let mut conn = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    save_protocol_template_version_to_db(&mut conn, request)
+}
+
+fn save_protocol_template_version_to_db(
+    conn: &mut Connection,
+    request: Value,
+) -> Result<Value, String> {
+    let protocol_id = value_string(&request, "protocolId")?;
+    let created_at = value_string(&request, "createdAt")?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let (active_version, schema): (i64, String) = tx.query_row(
+        "SELECT p.active_version,pv.schema_json FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version WHERE p.id=?1",
+        [&protocol_id],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).map_err(|_|"Protocol not found".to_string())?;
+    let mut spec: Value =
+        serde_json::from_str(&schema).map_err(|_| "Protocol schema is invalid".to_string())?;
+    if spec
+        .get("templateVariants")
+        .and_then(Value::as_object)
+        .is_some()
+    {
+        let variants = request
+            .get("templateVariants")
+            .and_then(Value::as_object)
+            .ok_or("This Protocol requires all template variants")?;
+        let existing = spec
+            .get("templateVariants")
+            .and_then(Value::as_object)
+            .unwrap();
+        for key in existing.keys() {
+            let value = variants
+                .get(key)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("Missing template variant: {key}"))?;
+            validate_protocol_template(value, &spec)?;
+        }
+        spec["templateVariants"] = Value::Object(variants.clone());
+    } else {
+        let template = value_string(&request, "template")?;
+        validate_protocol_template(&template, &spec)?;
+        spec["template"] = json!(template);
+    }
+    let next_version: i64 = tx
+        .query_row(
+            "SELECT coalesce(max(version_number),0)+1 FROM protocol_versions WHERE protocol_id=?1",
+            [&protocol_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    tx.execute("INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?1,?2,?3,'user',?4)",params![protocol_id,next_version,spec.to_string(),created_at]).map_err(|error|error.to_string())?;
+    tx.execute(
+        "UPDATE protocols SET active_version=?2 WHERE id=?1",
+        params![protocol_id, next_version],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(json!({"id":protocol_id,"previousVersion":active_version,"version":next_version}))
+}
+
 #[tauri::command]
 fn start_task_record(
     state: State<DatabaseState>,
@@ -947,18 +1440,20 @@ fn start_task_record(
     record_id: String,
     values: Value,
     input_sample_ids: Vec<String>,
+    external_inputs: Vec<Value>,
 ) -> Result<Value, String> {
     let mut conn = state
         .0
         .lock()
         .map_err(|_| "Database lock poisoned".to_string())?;
-    protocol_execution::execute(
+    protocol_execution::execute_with_external(
         &mut conn,
         &task_id,
         &protocol_id,
         &record_id,
         values,
         input_sample_ids,
+        external_inputs,
     )
     .map(|result| result.task)
 }
@@ -1515,6 +2010,56 @@ fn user_data_location(app: AppHandle) -> Result<String, String> {
     app_data_dir(&app).map(|path| path.display().to_string())
 }
 
+#[tauri::command]
+fn export_workspace_backup(
+    app: AppHandle,
+    state: State<DatabaseState>,
+    destination: String,
+    exported_at: String,
+) -> Result<workspace_backup::ExportResult, String> {
+    let connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    workspace_backup::export_workspace(
+        &connection,
+        &attachments_dir(&app)?,
+        Path::new(&destination),
+        &exported_at,
+    )
+}
+
+#[tauri::command]
+fn inspect_workspace_backup(
+    app: AppHandle,
+    path: String,
+) -> Result<workspace_backup::BackupSummary, String> {
+    workspace_backup::inspect_backup(Path::new(&path), &app_data_dir(&app)?)
+}
+
+#[tauri::command]
+fn restore_workspace_backup(
+    app: AppHandle,
+    state: State<DatabaseState>,
+    path: String,
+    imported_at: String,
+) -> Result<workspace_backup::RestoreResult, String> {
+    let mut connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    workspace_backup::restore_workspace(
+        &mut connection,
+        &app_data_dir(&app)?,
+        Path::new(&path),
+        &imported_at,
+        |restored| {
+            apply_schema(restored)?;
+            ensure_builtin_protocols(restored)
+        },
+    )
+}
+
 fn export_record_snapshot(connection: &Connection, record_id: &str) -> Result<Value, String> {
     let (id, task_id, task_title, task_start, experiment_code, experiment_title, protocol_name, protocol_snapshot, current_data, updated_at): (String, String, String, String, String, String, String, String, String, String) = connection
         .query_row(
@@ -1670,6 +2215,7 @@ fn mark_export_print_requested(state: State<DatabaseState>, id: String) -> Resul
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let connection =
                 initialize_database(app.handle()).map_err(|error| error.to_string())?;
@@ -1681,7 +2227,11 @@ pub fn run() {
             save_store,
             save_task,
             delete_task,
+            delete_record,
+            update_record_body,
             update_task_status,
+            save_user_protocol,
+            save_protocol_template_version,
             start_task_record,
             get_assay_workspace,
             create_assay_plate,
@@ -1691,6 +2241,9 @@ pub fn run() {
             create_qpcr_delta_ct_analysis,
             create_qpcr_delta_delta_ct_analysis,
             user_data_location,
+            export_workspace_backup,
+            inspect_workspace_backup,
+            restore_workspace_backup,
             create_export_manifest,
             mark_export_print_requested,
             create_process_event,
@@ -1737,8 +2290,90 @@ mod tests {
         let path = temporary_database_path("fresh");
         let connection = Connection::open(&path).unwrap();
         apply_schema(&connection).unwrap();
-        let table_count: i64 = connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('experiments','tasks','protocols','records','samples','attachments','export_manifests','assay_items','assay_plates','assay_well_mappings','assay_raw_imports','assay_raw_measurements')", [], |row| row.get(0)).unwrap();
-        assert_eq!(table_count, 12);
+        let table_count: i64 = connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('experiments','tasks','protocols','records','samples','sample_types','attachments','export_manifests','assay_items','assay_plates','assay_well_mappings','assay_raw_imports','assay_raw_measurements')", [], |row| row.get(0)).unwrap();
+        assert_eq!(table_count, 13);
+        drop(connection);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn user_protocol_creation_registers_types_and_persists_v1_schema() {
+        let path = temporary_database_path("user-protocol");
+        let mut connection = Connection::open(&path).unwrap();
+        apply_schema(&connection).unwrap();
+        let saved = save_user_protocol_to_db(
+            &mut connection,
+            json!({
+                "id":"protocol-mice-rna",
+                "name":"Mice RNA extraction",
+                "description":"Extract RNA from tissue",
+                "category":"自定义",
+                "accent":"#6957e8",
+                "inputType":"Mice",
+                "inputTypeDisplayName":"Mice",
+                "outputBehavior":"derived_one",
+                "outputType":"rna",
+                "outputTypeDisplayName":"RNA",
+                "consumptionPolicy":"consume",
+                "template":"日期：{{date}}\n{{input_sample_summary}} -> {{output_sample_summary}}",
+                "createdAt":"2026-08-25T10:00:00Z"
+            }),
+        )
+        .unwrap();
+        assert_eq!(saved["version"], 1);
+        let schema: String = connection.query_row("SELECT schema_json FROM protocol_versions WHERE protocol_id='protocol-mice-rna' AND version_number=1 AND origin='user'",[],|row|row.get(0)).unwrap();
+        let schema: Value = serde_json::from_str(&schema).unwrap();
+        assert_eq!(schema["execution"]["engine"], "sample_flow_v1");
+        assert_eq!(schema["execution"]["inputTypes"][0], "MICE");
+        assert_eq!(schema["execution"]["outputType"], "RNA");
+        let mice_display: String = connection
+            .query_row(
+                "SELECT display_name FROM sample_types WHERE canonical_type='MICE' AND origin='user'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mice_display, "Mice");
+        drop(connection);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn template_edit_creates_user_version_without_mutating_builtin_version() {
+        let path = temporary_database_path("protocol-template-version");
+        let mut connection = Connection::open(&path).unwrap();
+        apply_schema(&connection).unwrap();
+        ensure_builtin_protocols(&connection).unwrap();
+        let original: String = connection
+            .query_row(
+                "SELECT schema_json FROM protocol_versions WHERE protocol_id='pro-rt' AND version_number=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let saved = save_protocol_template_version_to_db(
+            &mut connection,
+            json!({
+                "protocolId":"pro-rt",
+                "template":"日期：{{date}}\n自定义正文\n输入：{{input_sample_summary}}\n输出：{{output_sample_summary}}\nRNA：{{rna_amount}}",
+                "createdAt":"2026-08-25T10:00:00Z"
+            }),
+        )
+        .unwrap();
+        assert_eq!(saved["previousVersion"], 1);
+        assert_eq!(saved["version"], 2);
+        let (active, origin, active_schema): (i64, String, String) = connection.query_row("SELECT p.active_version,pv.origin,pv.schema_json FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version WHERE p.id='pro-rt'",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+        assert_eq!(active, 2);
+        assert_eq!(origin, "user");
+        assert!(active_schema.contains("自定义正文"));
+        let unchanged: String = connection
+            .query_row(
+                "SELECT schema_json FROM protocol_versions WHERE protocol_id='pro-rt' AND version_number=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged, original);
         drop(connection);
         fs::remove_file(path).unwrap();
     }
@@ -1760,6 +2395,33 @@ mod tests {
         assert_eq!(sample_type, "CDNA");
         let lowercase_insert = connection.execute("INSERT INTO samples (id,workspace_id,experiment_id,sample_code,sample_type) VALUES ('bad','local','exp','EXP900-cDNA02','cDNA')", []);
         assert!(lowercase_insert.is_err());
+        drop(connection);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn migration_marks_imported_roots_external_without_reclassifying_internal_outputs() {
+        let path = temporary_database_path("sample-origin-migration");
+        let connection = Connection::open(&path).unwrap();
+        apply_schema(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO experiments VALUES ('exp','EXP900','Origins','','#000')",
+                [],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO samples (id,experiment_id,sample_code,sample_type,created_at,metadata_json) VALUES ('external-root','exp','EXP900-CELL01','CELL','now','{}'),('internal-output','exp','EXP900-CELL02','CELL','now','{}')", []).unwrap();
+        connection.execute("INSERT INTO process_events (id,experiment_id,event_type,occurred_at,parameters_json,provenance,created_at) VALUES ('imported','exp','import','now','{}','user_imported','now'),('recorded','exp','thaw','now','{}','labflow_recorded','now')", []).unwrap();
+        connection.execute("INSERT INTO event_outputs VALUES ('imported','external-root'),('recorded','internal-output')", []).unwrap();
+        apply_schema(&connection).unwrap();
+        let origins: (String, String) = connection
+            .query_row(
+                "SELECT (SELECT origin FROM samples WHERE id='external-root'),(SELECT origin FROM samples WHERE id='internal-output')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(origins, ("external".into(), "internal".into()));
         drop(connection);
         fs::remove_file(path).unwrap();
     }
@@ -2229,6 +2891,250 @@ mod tests {
         assert!(pooled_upstream.contains(&"c2".to_string()));
         assert!(pooled_upstream.contains(&"c3".to_string()));
         drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn delete_record_removes_owned_data_and_restores_task() {
+        let path = temporary_database_path("delete-record");
+        let files_dir = path.with_extension("files");
+        let mut connection = Connection::open(&path).unwrap();
+        apply_schema(&connection).unwrap();
+        ensure_builtin_protocols(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO experiments VALUES ('exp','EXP900','Delete record','','#000')",
+                [],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,record_id,created_at,updated_at) VALUES ('task','exp','Thaw','2026-08-26T09:00','2026-08-26T10:00','planned',NULL,'now','now')", []).unwrap();
+        let created = protocol_execution::execute(
+            &mut connection,
+            "task",
+            "pro-cell-thaw",
+            "record",
+            json!({"cell_name":"A549"}),
+            vec![],
+        )
+        .unwrap();
+        fs::create_dir_all(files_dir.join("attachment")).unwrap();
+        fs::write(files_dir.join("attachment/raw.txt"), b"raw").unwrap();
+        connection.execute("INSERT INTO attachments (id,record_id,file_name,relative_path,created_at) VALUES ('attachment','record','raw.txt','files/attachment/raw.txt','now')", []).unwrap();
+        connection.execute("INSERT INTO results (id,record_id,result_type,structured_data_json,created_at) VALUES ('result','record','test','{}','now')", []).unwrap();
+        connection.execute("INSERT INTO export_manifests (id,date_from,date_to,record_ids_json,content_sha256,relative_path,status,created_at) VALUES ('export','2026-08-26','2026-08-26','[\"record\"]','hash','files/exports/export/manifest.json','previewed','now')", []).unwrap();
+
+        let export_error =
+            delete_record_from_db(&mut connection, &files_dir, "record").unwrap_err();
+        assert!(export_error.contains("export manifest"));
+        connection
+            .execute("DELETE FROM export_manifests WHERE id='export'", [])
+            .unwrap();
+
+        delete_record_from_db(&mut connection, &files_dir, "record").unwrap();
+
+        let task: (String, Option<String>) = connection
+            .query_row(
+                "SELECT status,record_id FROM tasks WHERE id='task'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(task, ("planned".into(), None));
+        for (table, predicate) in [
+            ("records", "id='record'"),
+            ("process_events", "record_id='record'"),
+            ("record_samples", "record_id='record'"),
+            ("attachments", "record_id='record'"),
+            ("results", "record_id='record'"),
+        ] {
+            let count: i64 = connection
+                .query_row(
+                    &format!("SELECT count(*) FROM {table} WHERE {predicate}"),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0, "{table} was not cleaned");
+        }
+        let output_count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM samples WHERE id=?1",
+                [&created.output_ids[0]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(output_count, 0);
+        assert!(!files_dir.join("attachment").exists());
+        drop(connection);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir_all(files_dir).unwrap();
+    }
+
+    #[test]
+    fn record_body_edit_is_scoped_audited_and_atomic() {
+        let path = temporary_database_path("record-body-edit");
+        let mut connection = Connection::open(&path).unwrap();
+        apply_schema(&connection).unwrap();
+        ensure_builtin_protocols(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO experiments VALUES ('exp','EXP901','Record body edit','','#000')",
+                [],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,record_id,created_at,updated_at) VALUES ('task-a','exp','Thaw A','2026-08-26T09:00','2026-08-26T10:00','planned',NULL,'now','now'),('task-b','exp','Thaw B','2026-08-26T10:00','2026-08-26T11:00','planned',NULL,'now','now')", []).unwrap();
+        protocol_execution::execute(
+            &mut connection,
+            "task-a",
+            "pro-cell-thaw",
+            "record-a",
+            json!({"cell_name":"A549"}),
+            vec![],
+        )
+        .unwrap();
+        protocol_execution::execute(
+            &mut connection,
+            "task-b",
+            "pro-cell-thaw",
+            "record-b",
+            json!({"cell_name":"HeLa"}),
+            vec![],
+        )
+        .unwrap();
+        let snapshot_before: String = connection
+            .query_row(
+                "SELECT protocol_snapshot_json FROM records WHERE id='record-a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let sibling_before: String = connection
+            .query_row(
+                "SELECT current_data_json FROM records WHERE id='record-b'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        update_record_body_in_db(
+            &mut connection,
+            "record-a",
+            "Edited procedure\n1. Keep exact text.",
+            "record-change-a",
+            "2026-08-26T12:00:00Z",
+        )
+        .unwrap();
+
+        let (current_after, snapshot_after, updated_at): (String, String, String) = connection
+            .query_row(
+                "SELECT current_data_json,protocol_snapshot_json,updated_at FROM records WHERE id='record-a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let current_after: Value = serde_json::from_str(&current_after).unwrap();
+        assert_eq!(
+            current_after["renderedContent"],
+            "Edited procedure\n1. Keep exact text."
+        );
+        assert_eq!(snapshot_after, snapshot_before);
+        assert_eq!(updated_at, "2026-08-26T12:00:00Z");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT current_data_json FROM records WHERE id='record-b'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            sibling_before
+        );
+        let change: (String, String, String) = connection
+            .query_row(
+                "SELECT field_path,old_value_json,new_value_json FROM record_changes WHERE id='record-change-a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(change.0, "renderedContent");
+        assert!(change.1.contains("37"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&change.2).unwrap(),
+            "Edited procedure\n1. Keep exact text."
+        );
+
+        assert!(update_record_body_in_db(
+            &mut connection,
+            "record-a",
+            "   ",
+            "record-change-blank",
+            "2026-08-26T13:00:00Z",
+        )
+        .unwrap_err()
+        .contains("cannot be empty"));
+        assert!(update_record_body_in_db(
+            &mut connection,
+            "record-a",
+            "This update must roll back",
+            "record-change-a",
+            "2026-08-26T14:00:00Z",
+        )
+        .is_err());
+        let preserved: String = connection
+            .query_row(
+                "SELECT json_extract(current_data_json,'$.renderedContent') FROM records WHERE id='record-a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, "Edited procedure\n1. Keep exact text.");
+        drop(connection);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn delete_record_is_blocked_when_an_output_has_downstream_use() {
+        let path = temporary_database_path("delete-record-downstream");
+        let files_dir = path.with_extension("files");
+        let mut connection = Connection::open(&path).unwrap();
+        apply_schema(&connection).unwrap();
+        ensure_builtin_protocols(&connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO experiments VALUES ('exp','EXP900','Delete record','','#000')",
+                [],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,record_id,created_at,updated_at) VALUES ('source-task','exp','Thaw','2026-08-26T09:00','2026-08-26T10:00','planned',NULL,'now','now'),('child-task','exp','Use','2026-08-27T09:00','2026-08-27T10:00','in_progress','child-record','now','now')", []).unwrap();
+        let source = protocol_execution::execute(
+            &mut connection,
+            "source-task",
+            "pro-cell-thaw",
+            "source-record",
+            json!({"cell_name":"A549"}),
+            vec![],
+        )
+        .unwrap();
+        connection.execute("INSERT INTO records (id,task_id,experiment_id,protocol_id,protocol_snapshot_json,current_data_json,updated_at) VALUES ('child-record','child-task','exp','pro-cell-passage','{}','{}','now')", []).unwrap();
+        connection
+            .execute(
+                "INSERT INTO record_samples VALUES ('child-record',?1,'input')",
+                [&source.output_ids[0]],
+            )
+            .unwrap();
+
+        let error =
+            delete_record_from_db(&mut connection, &files_dir, "source-record").unwrap_err();
+        assert!(error.contains("downstream"));
+        let preserved: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM records WHERE id='source-record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, 1);
+        drop(connection);
         fs::remove_file(path).unwrap();
     }
 }

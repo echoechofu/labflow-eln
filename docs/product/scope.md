@@ -14,12 +14,14 @@
 - Protocol snapshot 与已渲染的 Record 正文：历史 Record 不会因内置 Protocol 后续升级而被重新渲染。
 - Sample lineage、Sample 消耗/非破坏性使用/分装、孔板容量核验与孔位输出；WB 的测量产物建模为 Result，而非 Sample；qPCR、ELISA、CCK-8 本阶段只保存 Setup、Mapping 与 Raw 数据，不创建分析 Result。
 - Record 按 Task 开始日期筛选/排序、合并预览，并可生成可校验的 export manifest 后调用系统打印。
+- 数据管理可将当前 SQLite 与 `files/` 导出为完整 `.labflow-backup` 工作区备份，或在校验完整性、外键、版本、相对路径与文件 checksum 后替换式恢复。恢复前自动导出当前工作区作为恢复点。
 - qPCR、ELISA、CCK-8 的通用终末检测骨架：Record Setup 保存检测项目；独立 Plate Mapping 保存 `Well → Sample × AssayItem`；UTF-8 CSV/TSV 原文件作为 Attachment 保存并解析；仅将 Mapping 与 Raw Measurement 共同存在的孔组成 join dataset。
 - SQLite、附件和导出清单与源码目录隔离；macOS canonical 数据目录为 `~/Library/Application Support/LabFlow/`。
 
 ## 明确暂不实现
 
 - 云同步、多人协作或远程服务端。
+- 两个 LabFlow 工作区的数据合并、部分 Experiment 导入或冲突 ID 改写。
 - 打包桌面应用中的 localhost/Express API 依赖。
 - Experiment Task Graph 内新增、删除、拖拽或编辑关系；该图只读。
 - Protocol Builder、用户上传 Protocol package，或将任意 Word/PDF 自动转换成可执行 Protocol。

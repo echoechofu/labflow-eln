@@ -1052,13 +1052,13 @@ mod tests {
             .unwrap();
         connection
             .execute(
-                "INSERT INTO protocols VALUES ('protocol','Terminal','Assay',1,'#000')",
+                "INSERT INTO protocols (id,name,category,active_version,accent) VALUES ('protocol','Terminal','Assay',1,'#000')",
                 [],
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO protocol_versions VALUES ('protocol',1,'{}')",
+                "INSERT INTO protocol_versions (protocol_id,version_number,schema_json) VALUES ('protocol',1,'{}')",
                 [],
             )
             .unwrap();

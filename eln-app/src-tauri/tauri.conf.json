@@ -9,6 +9,21 @@
     "beforeBuildCommand": "npm run build:web",
     "frontendDist": "../dist"
   },
-  "app": { "windows": [{ "title": "LabFlow", "width": 1200, "height": 800, "minWidth": 900, "minHeight": 600 }] },
-  "bundle": { "active": true, "targets": ["app"], "macOS": { "minimumSystemVersion": "12.0" } }
+  "app": {
+    "windows": [
+      {
+        "title": "LabFlow",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.icns"],
+    "macOS": { "minimumSystemVersion": "12.0" }
+  }
 }

@@ -11,21 +11,39 @@ import {
 } from "./domain";
 import {
   createExportManifest,
+  chooseWorkspaceBackup,
+  deleteRecord,
   deleteTask,
   loadStore,
   markExportPrintRequested,
+  exportWorkspaceBackup,
+  restoreWorkspaceBackup,
   saveTask,
   startTaskRecord,
   uid,
+  updateRecordBody,
   updateTaskStatus,
+  type ExternalSampleDraft,
   type Store,
+  type WorkspaceBackupSummary,
 } from "./repository";
 import {
   buildTaskGraph,
   TASK_GRAPH_NODE_HEIGHT,
   TASK_GRAPH_NODE_WIDTH,
 } from "./taskGraph";
+import {
+  eligibleParentTaskOptions,
+  groupSamplesBySource,
+  sampleSourceInfo,
+  type SampleSourceKind,
+} from "./taskInputs";
+import { searchProtocols } from "./protocolSearch";
 import TerminalAssayWorkspace from "./TerminalAssayWorkspace";
+import {
+  ProtocolCreationWizard,
+  ProtocolTemplateEditor,
+} from "./ProtocolEditor";
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 64;
@@ -110,6 +128,7 @@ export default function App() {
     ["experiments", "◈", "实验"],
     ["protocols", "▤", "Protocols"],
     ["records", "▧", "Records"],
+    ["data", "⇅", "数据管理"],
   ] as const;
   return (
     <main className="app-shell" data-build-marker="task-crud-current">
@@ -156,7 +175,13 @@ export default function App() {
           create={() => setTaskForm(freshTask())}
         />
       )}
-      {page === "protocols" && <ProtocolsPage protocols={store.protocols} />}
+      {page === "protocols" && (
+        <ProtocolsPage
+          protocols={store.protocols}
+          sampleTypes={store.sampleTypes}
+          changed={load}
+        />
+      )}
       {page === "experiments" && (
         <ExperimentsPage store={store} openTask={setSelectedTask} />
       )}
@@ -169,6 +194,7 @@ export default function App() {
           changed={load}
         />
       )}
+      {page === "data" && <DataManagementPage changed={load} />}
       {selectedTask && (
         <TaskDrawer
           task={selectedTask}
@@ -176,6 +202,7 @@ export default function App() {
             (item) => item.id === selectedTask.experimentId,
           )}
           samples={store.samples}
+          sampleTypes={store.sampleTypes}
           protocols={store.protocols}
           tasks={store.tasks}
           records={store.records}
@@ -193,6 +220,7 @@ export default function App() {
             setSelectedTask(undefined);
             load();
           }}
+          protocolsChanged={load}
         />
       )}
       {taskForm && (
@@ -208,6 +236,176 @@ export default function App() {
         />
       )}
     </main>
+  );
+}
+
+function BackupSummaryView({ summary }: { summary: WorkspaceBackupSummary }) {
+  return (
+    <dl className="backup-summary">
+      <div>
+        <dt>备份时间</dt>
+        <dd>{new Date(summary.exportedAt).toLocaleString("zh-CN")}</dd>
+      </div>
+      <div>
+        <dt>LabFlow 版本</dt>
+        <dd>{summary.appVersion}</dd>
+      </div>
+      <div>
+        <dt>Experiments</dt>
+        <dd>{summary.counts.experiments}</dd>
+      </div>
+      <div>
+        <dt>Tasks</dt>
+        <dd>{summary.counts.tasks}</dd>
+      </div>
+      <div>
+        <dt>Records</dt>
+        <dd>{summary.counts.records}</dd>
+      </div>
+      <div>
+        <dt>Samples</dt>
+        <dd>{summary.counts.samples}</dd>
+      </div>
+      <div>
+        <dt>附件 / 文件</dt>
+        <dd>
+          {summary.counts.attachments} / {summary.counts.files}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+function DataManagementPage({ changed }: { changed: () => void }) {
+  const [busy, setBusy] = useState<"export" | "inspect" | "restore">();
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState<{
+    path: string;
+    summary: WorkspaceBackupSummary;
+  }>();
+
+  const runExport = async () => {
+    setBusy("export");
+    setError("");
+    setMessage("");
+    try {
+      const result = await exportWorkspaceBackup();
+      if (result) setMessage(`备份已导出：${result.path}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const chooseImport = async () => {
+    setBusy("inspect");
+    setError("");
+    setMessage("");
+    try {
+      setPending(await chooseWorkspaceBackup());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const confirmRestore = async () => {
+    if (!pending) return;
+    setBusy("restore");
+    setError("");
+    try {
+      const restored = await restoreWorkspaceBackup(pending.path);
+      setPending(undefined);
+      setMessage(
+        `工作区已恢复。导入前的自动备份：${restored.recoveryBackupPath}`,
+      );
+      changed();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  return (
+    <section className="page data-management-page">
+      <header>
+        <div>
+          <p className="eyebrow">LOCAL WORKSPACE</p>
+          <h1>数据管理</h1>
+          <p className="muted">
+            导出或恢复完整的 SQLite、附件、Sample lineage 与用户 Protocol。
+          </p>
+        </div>
+      </header>
+      <div className="data-management-grid">
+        <article>
+          <span className="data-management-icon">↑</span>
+          <h2>导出工作区备份</h2>
+          <p>
+            生成一个可迁移的 <code>.labflow-backup</code>
+            文件。导出使用 SQLite 一致性快照，不停止当前工作区。
+          </p>
+          <button
+            className="primary"
+            disabled={busy !== undefined}
+            onClick={() => void runExport()}
+          >
+            {busy === "export" ? "正在导出…" : "一键导出"}
+          </button>
+        </article>
+        <article>
+          <span className="data-management-icon">↓</span>
+          <h2>从备份恢复</h2>
+          <p>
+            导入前会校验数据库、外键、相对路径和每个文件的
+            SHA-256，不会合并两个工作区。
+          </p>
+          <button
+            className="secondary"
+            disabled={busy !== undefined}
+            onClick={() => void chooseImport()}
+          >
+            {busy === "inspect" ? "正在校验…" : "选择备份文件"}
+          </button>
+        </article>
+      </div>
+      {message && <p className="backup-success">{message}</p>}
+      {error && <p className="form-error backup-error">{error}</p>}
+      {pending && (
+        <div className="overlay centered backup-confirm-overlay">
+          <section
+            className="modal backup-confirm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="backup-confirm-title"
+          >
+            <h2 id="backup-confirm-title">恢复这个工作区？</h2>
+            <p>
+              恢复会完整替换当前工作区，不会合并数据。系统会先自动导出当前工作区作为恢复点。
+            </p>
+            <BackupSummaryView summary={pending.summary} />
+            <div className="backup-confirm-actions">
+              <button
+                className="secondary"
+                disabled={busy === "restore"}
+                onClick={() => setPending(undefined)}
+              >
+                取消
+              </button>
+              <button
+                className="danger"
+                disabled={busy === "restore"}
+                onClick={() => void confirmRestore()}
+              >
+                {busy === "restore" ? "正在恢复…" : "确认替换当前工作区"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -254,10 +452,6 @@ function Calendar({
         <h2>
           {format.format(week)} – {format.format(end)}
         </h2>
-        <div className="seg">
-          <button className="selected">周</button>
-          <button disabled>月</button>
-        </div>
       </div>
       <div className="calendar">
         <div className="time-col">
@@ -337,6 +531,7 @@ function TaskDrawer({
   task,
   experiment,
   samples,
+  sampleTypes,
   protocols,
   tasks,
   records,
@@ -344,10 +539,12 @@ function TaskDrawer({
   edit,
   openRecord,
   changed,
+  protocolsChanged,
 }: {
   task: Task;
   experiment?: Experiment;
   samples: Store["samples"];
+  sampleTypes: Store["sampleTypes"];
   protocols: Store["protocols"];
   tasks: Store["tasks"];
   records: Store["records"];
@@ -355,16 +552,35 @@ function TaskDrawer({
   edit: () => void;
   openRecord: () => void;
   changed: () => void;
+  protocolsChanged: () => void;
 }) {
   const [error, setError] = useState("");
   const [choosingProtocol, setChoosingProtocol] = useState(false);
+  const [protocolQuery, setProtocolQuery] = useState("");
+  const [creatingProtocol, setCreatingProtocol] = useState(false);
   const [protocol, setProtocol] = useState<Protocol>();
   const [values, setValues] = useState<Record<string, string>>({});
-  const [sourceTaskIds, setSourceTaskIds] = useState<string[]>([]);
   const [inputSampleIds, setInputSampleIds] = useState<string[]>([]);
+  const [inputMode, setInputMode] = useState<"existing" | "external">(
+    "existing",
+  );
+  const [activeSampleGroup, setActiveSampleGroup] =
+    useState<SampleSourceKind>("direct_parent");
+  const [externalSampleType, setExternalSampleType] = useState("");
+  const [externalSampleCount, setExternalSampleCount] = useState(1);
+  const [externalSamples, setExternalSamples] = useState<
+    { displayName: string; conditions: string }[]
+  >([{ displayName: "", conditions: "" }]);
   const [plateGroups, setPlateGroups] = useState<PlateTreatmentGroup[]>([
     { factor: "", duration: "", wellCount: 1 },
   ]);
+  const protocolResults = searchProtocols(protocols, protocolQuery);
+  const closeProtocolPicker = () => {
+    setChoosingProtocol(false);
+    setCreatingProtocol(false);
+    setProtocol(undefined);
+    setProtocolQuery("");
+  };
   const selectedInput = samples.find(
     (sample) => sample.id === values.input_sample,
   );
@@ -377,33 +593,110 @@ function TaskDrawer({
     plateCapacity(selectedInput?.metadata?.plate_format) ||
     plateCapacity(selectedInput?.metadata?.container_name) ||
     plateCapacity(values.new_plate_format);
-  const usesParentTaskOutputs =
-    protocol?.execution?.inputSource === "parent_task_outputs";
-  const upstreamTasks = tasks.filter((item) =>
-    (task.parentTaskIds || []).includes(item.id),
-  );
+  const usesExperimentSampleInput = [
+    "parent_task_outputs",
+    "experiment_samples",
+  ].includes(protocol?.execution?.inputSource || "");
   const eligibleInputSamples = samples.filter((sample) => {
-    if (!usesParentTaskOutputs) return false;
+    if (!usesExperimentSampleInput) return false;
     if (sample.consumed) return false;
+    if (sample.experimentId !== task.experimentId) return false;
     if (
       !(protocol?.execution?.inputTypes ?? [])
         .map(normalizeSampleType)
         .includes(normalizeSampleType(sample.type))
     )
       return false;
-    return sourceTaskIds.some((sourceTaskId) => {
-      const sourceTask = tasks.find((item) => item.id === sourceTaskId);
-      const sourceRecord = records.find(
-        (record) => record.id === sourceTask?.recordId,
-      );
-      return sourceRecord?.outputs.includes(sample.id);
-    });
+    return true;
   });
+  const sampleGroups = groupSamplesBySource(
+    eligibleInputSamples,
+    task,
+    tasks,
+    records,
+  );
+  const sampleGroupLabels: Record<SampleSourceKind, string> = {
+    direct_parent: "直接上级 Task 输出",
+    other_task: "其他 Task 输出",
+    external: "外部登记 Sample",
+  };
+  const selectedInGroup = (kind: SampleSourceKind) =>
+    sampleGroups[kind].filter((sample) => inputSampleIds.includes(sample.id))
+      .length;
+  const toggleInputSample = (sampleId: string, selected: boolean) => {
+    setInputMode("existing");
+    setInputSampleIds((current) =>
+      selected
+        ? current.includes(sampleId)
+          ? current
+          : [...current, sampleId]
+        : current.filter((id) => id !== sampleId),
+    );
+    setError("");
+  };
+  const renderSampleOption = (sample: Store["samples"][number]) => {
+    const source = sampleSourceInfo(sample, task, tasks, records);
+    const sourceText = source.sourceTask
+      ? `来源：${source.sourceTask.title} · ${dayLabel(source.sourceTask.start)} ${formatTime(source.sourceTask.start)}`
+      : source.kind === "external"
+        ? "外部登记 · 无来源 Task"
+        : "来源 Task 不可用";
+    return (
+      <label className="sample-source-option" key={sample.id}>
+        <input
+          type="checkbox"
+          checked={inputSampleIds.includes(sample.id)}
+          onChange={(event) =>
+            toggleInputSample(sample.id, event.target.checked)
+          }
+        />
+        <span>
+          <span className={`sample-source-badge ${source.kind}`}>
+            {source.kind === "direct_parent"
+              ? "直接上级"
+              : source.kind === "other_task"
+                ? "其他 Task"
+                : "外部登记"}
+          </span>
+          <b>{sample.code}</b>
+          <small>
+            {sample.displayName || sampleTypeLabel(sample.type)} · {sourceText}
+            {sample.metadata?.treatment_factor
+              ? ` · ${String(sample.metadata.treatment_factor)}`
+              : ""}
+            {sample.metadata?.treatment_duration
+              ? ` · ${String(sample.metadata.treatment_duration)}`
+              : ""}
+          </small>
+        </span>
+      </label>
+    );
+  };
   const selectProtocol = (item: Protocol) => {
     setProtocol(item);
     setError("");
     setInputSampleIds([]);
-    setSourceTaskIds([]);
+    setInputMode("existing");
+    setExternalSampleType(item.execution?.inputTypes?.[0] || "");
+    setExternalSampleCount(1);
+    setExternalSamples([{ displayName: "", conditions: "" }]);
+    const inputTypes = (item.execution?.inputTypes || []).map(
+      normalizeSampleType,
+    );
+    const candidates = samples.filter(
+      (sample) =>
+        !sample.consumed &&
+        sample.experimentId === task.experimentId &&
+        inputTypes.includes(normalizeSampleType(sample.type)),
+    );
+    const groups = groupSamplesBySource(candidates, task, tasks, records);
+    setActiveSampleGroup(
+      groups.direct_parent.length
+        ? "direct_parent"
+        : groups.other_task.length
+          ? "other_task"
+          : "external",
+    );
     setValues(
       Object.fromEntries(
         (item.fields || [])
@@ -422,10 +715,20 @@ function TaskDrawer({
   };
   const start = async () => {
     if (!protocol) return;
-    if (usesParentTaskOutputs && sourceTaskIds.length === 0)
-      return setError("请先选择至少一个上级 Task。");
-    if (usesParentTaskOutputs && inputSampleIds.length === 0)
-      return setError("请从上级 Task 的输出中选择至少一个 Sample。");
+    if (
+      usesExperimentSampleInput &&
+      inputMode === "existing" &&
+      inputSampleIds.length === 0
+    )
+      return setError("请从当前 Experiment 中选择至少一个 Sample。");
+    if (
+      usesExperimentSampleInput &&
+      inputMode === "external" &&
+      (!externalSampleType ||
+        externalSamples.length === 0 ||
+        externalSamples.some((sample) => !sample.displayName.trim()))
+    )
+      return setError("请填写所有迁入 Sample 的类型和 Label。");
     if (
       protocol.fields?.some(
         (field) => field.required && !values[field.key]?.trim(),
@@ -483,11 +786,20 @@ function TaskDrawer({
         protocol.id,
         uid("rec"),
         submittedValues,
-        usesParentTaskOutputs
+        usesExperimentSampleInput && inputMode === "existing"
           ? inputSampleIds
           : values.input_sample
             ? [values.input_sample]
             : [],
+        usesExperimentSampleInput && inputMode === "external"
+          ? externalSamples.map((sample): ExternalSampleDraft => ({
+              sampleType: externalSampleType,
+              displayName: sample.displayName.trim(),
+              metadata: sample.conditions.trim()
+                ? { existing_conditions: sample.conditions.trim() }
+                : {},
+            }))
+          : [],
       );
       changed();
     } catch (reason) {
@@ -519,7 +831,14 @@ function TaskDrawer({
         </dl>
         <button
           className="primary wide"
-          onClick={task.recordId ? openRecord : () => setChoosingProtocol(true)}
+          onClick={
+            task.recordId
+              ? openRecord
+              : () => {
+                  setProtocolQuery("");
+                  setChoosingProtocol(true);
+                }
+          }
         >
           打开记录 →
         </button>
@@ -534,104 +853,265 @@ function TaskDrawer({
         {error && <p className="form-error">{error}</p>}
         {choosingProtocol && (
           <div className="overlay centered">
-            <div className="modal">
+            <div className={`modal ${protocol ? "" : "protocol-search-modal"}`}>
               <button
                 className="close"
-                onClick={() => {
-                  setChoosingProtocol(false);
-                  setProtocol(undefined);
-                }}
+                onClick={closeProtocolPicker}
+                aria-label="关闭 Protocol 选择"
               >
                 ×
               </button>
               {!protocol ? (
-                protocols.map((item) => (
-                  <button
-                    className="picker"
-                    onClick={() => selectProtocol(item)}
-                    key={item.id}
-                  >
-                    <div>
-                      <b>{item.name}</b>
-                      <small>{item.category}</small>
+                <>
+                  <p className="eyebrow">OPEN RECORD</p>
+                  <h2>选择 Protocol</h2>
+                  <label className="protocol-search-field">
+                    <span>搜索 Protocol</span>
+                    <input
+                      autoFocus
+                      type="search"
+                      value={protocolQuery}
+                      onChange={(event) => setProtocolQuery(event.target.value)}
+                      placeholder="输入名称、描述或分类"
+                    />
+                  </label>
+                  {!protocolQuery.trim() ? (
+                    <div className="protocol-search-prompt">
+                      输入关键词后显示匹配的 Protocol。
                     </div>
-                    →
-                  </button>
-                ))
+                  ) : protocolResults.length ? (
+                    <div className="protocol-search-results">
+                      <small>找到 {protocolResults.length} 个 Protocol</small>
+                      {protocolResults.map((item) => (
+                        <button
+                          className="picker"
+                          onClick={() => selectProtocol(item)}
+                          key={item.id}
+                        >
+                          <div>
+                            <b>{item.name}</b>
+                            <small>
+                              {item.category}
+                              {item.description ? ` · ${item.description}` : ""}
+                            </small>
+                          </div>
+                          →
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="protocol-search-empty">
+                      <b>没有找到“{protocolQuery.trim()}”</b>
+                      <p>可以创建新的 Protocol，并继续用于当前 Record。</p>
+                      <button
+                        className="primary"
+                        onClick={() => setCreatingProtocol(true)}
+                      >
+                        ＋ 新增 Protocol
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
                   <h2>{protocol.name}</h2>
-                  {usesParentTaskOutputs && (
+                  {usesExperimentSampleInput && (
                     <fieldset className="protocol-inputs">
-                      <legend>1. 选择来源上级 Task</legend>
-                      {upstreamTasks.map((sourceTask) => (
-                        <label key={sourceTask.id}>
-                          <input
-                            type="checkbox"
-                            checked={sourceTaskIds.includes(sourceTask.id)}
-                            onChange={(event) => {
-                              setSourceTaskIds((current) =>
-                                event.target.checked
-                                  ? [...current, sourceTask.id]
-                                  : current.filter(
-                                      (id) => id !== sourceTask.id,
-                                    ),
-                              );
-                              setInputSampleIds([]);
-                              setError("");
-                            }}
-                          />
-                          <span>
-                            <b>{sourceTask.title}</b>
-                            <small>
-                              {sourceTask.recordId
-                                ? "已有 Record"
-                                : "尚未产生 Record"}
-                            </small>
-                          </span>
-                        </label>
-                      ))}
-                      {upstreamTasks.length === 0 && (
-                        <p className="form-error">
-                          当前 Task 没有上级 Task；请先在“修改任务”中建立关系。
-                        </p>
-                      )}
-                      <legend>2. 选择上级 Task 输出 Sample</legend>
-                      {eligibleInputSamples.map((sample) => (
-                        <label key={sample.id}>
-                          <input
-                            type="checkbox"
-                            checked={inputSampleIds.includes(sample.id)}
-                            onChange={(event) =>
-                              setInputSampleIds((current) =>
-                                event.target.checked
-                                  ? [...current, sample.id]
-                                  : current.filter((id) => id !== sample.id),
-                              )
-                            }
-                          />
-                          <span>
-                            <b>{sample.code}</b>
-                            <small>
-                              {sample.displayName ||
-                                sampleTypeLabel(sample.type)}
-                              {sample.metadata?.treatment_factor
-                                ? ` · ${String(sample.metadata.treatment_factor)}`
-                                : ""}
-                              {sample.metadata?.treatment_duration
-                                ? ` · ${String(sample.metadata.treatment_duration)}`
-                                : ""}
-                            </small>
-                          </span>
-                        </label>
-                      ))}
-                      {sourceTaskIds.length > 0 &&
-                        eligibleInputSamples.length === 0 && (
-                          <p className="form-error">
-                            所选上级 Task 尚无符合此 Protocol 类型要求的输出
-                            Sample。
-                          </p>
+                      <legend>1. 本次实验使用什么 Sample？</legend>
+                      {inputMode === "existing" &&
+                        inputSampleIds.length > 0 && (
+                          <div className="selected-sample-summary">
+                            <b>已选择 {inputSampleIds.length} 个 Sample</b>
+                            <span>
+                              {inputSampleIds
+                                .map(
+                                  (id) =>
+                                    samples.find((sample) => sample.id === id)
+                                      ?.code,
+                                )
+                                .filter(Boolean)
+                                .join("、")}
+                            </span>
+                          </div>
                         )}
+                      <div className="sample-source-groups">
+                        {(
+                          [
+                            "direct_parent",
+                            "other_task",
+                            "external",
+                          ] as SampleSourceKind[]
+                        ).map((kind, index) => (
+                          <button
+                            type="button"
+                            className={
+                              activeSampleGroup === kind ? "active" : ""
+                            }
+                            key={kind}
+                            onClick={() => setActiveSampleGroup(kind)}
+                          >
+                            <span>
+                              <i>{index + 1}</i>
+                              <b>{sampleGroupLabels[kind]}</b>
+                            </span>
+                            <small>
+                              {sampleGroups[kind].length} 个可用
+                              {selectedInGroup(kind) > 0
+                                ? ` · 已选 ${selectedInGroup(kind)}`
+                                : ""}
+                            </small>
+                            <em>{activeSampleGroup === kind ? "▼" : "▶"}</em>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="sample-source-panel">
+                        {activeSampleGroup !== "external" && (
+                          <>
+                            {sampleGroups[activeSampleGroup].map(
+                              renderSampleOption,
+                            )}
+                            {sampleGroups[activeSampleGroup].length === 0 && (
+                              <p className="form-hint">
+                                该来源中没有符合此 Protocol 的可用 Sample。
+                              </p>
+                            )}
+                          </>
+                        )}
+                        {activeSampleGroup === "external" && (
+                          <>
+                            {inputMode === "existing" &&
+                              sampleGroups.external.map(renderSampleOption)}
+                            {inputMode === "existing" &&
+                              sampleGroups.external.length === 0 && (
+                                <p className="form-hint">
+                                  当前 Experiment 没有已登记的外部 Sample。
+                                </p>
+                              )}
+                            {inputMode === "existing" ? (
+                              <button
+                                className="link-button register-external-button"
+                                type="button"
+                                onClick={() => {
+                                  setInputMode("external");
+                                  setInputSampleIds([]);
+                                  setError("");
+                                }}
+                              >
+                                ＋ 登记新的当前已有 Sample
+                              </button>
+                            ) : (
+                              <div className="external-sample-form">
+                                <button
+                                  className="link-button"
+                                  type="button"
+                                  onClick={() => {
+                                    setInputMode("existing");
+                                    setError("");
+                                  }}
+                                >
+                                  ← 选择已登记的外部 Sample
+                                </button>
+                                <label className="task-form">
+                                  Sample type
+                                  <select
+                                    value={externalSampleType}
+                                    onChange={(event) =>
+                                      setExternalSampleType(event.target.value)
+                                    }
+                                  >
+                                    {(protocol.execution?.inputTypes || []).map(
+                                      (sampleType) => (
+                                        <option
+                                          key={sampleType}
+                                          value={sampleType}
+                                        >
+                                          {sampleTypeLabel(sampleType)}
+                                        </option>
+                                      ),
+                                    )}
+                                  </select>
+                                </label>
+                                <label className="task-form">
+                                  数量
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max="96"
+                                    value={externalSampleCount}
+                                    onChange={(event) => {
+                                      const count = Math.max(
+                                        1,
+                                        Math.min(
+                                          96,
+                                          Number(event.target.value) || 1,
+                                        ),
+                                      );
+                                      setExternalSampleCount(count);
+                                      setExternalSamples((current) =>
+                                        Array.from(
+                                          { length: count },
+                                          (_, index) =>
+                                            current[index] || {
+                                              displayName: "",
+                                              conditions: "",
+                                            },
+                                        ),
+                                      );
+                                    }}
+                                  />
+                                </label>
+                                {externalSamples.map((sample, index) => (
+                                  <div
+                                    className="external-sample-row"
+                                    key={index}
+                                  >
+                                    <b>Sample {index + 1}</b>
+                                    <label>
+                                      Label
+                                      <input
+                                        value={sample.displayName}
+                                        onChange={(event) =>
+                                          setExternalSamples((current) =>
+                                            current.map((item, itemIndex) =>
+                                              itemIndex === index
+                                                ? {
+                                                    ...item,
+                                                    displayName:
+                                                      event.target.value,
+                                                  }
+                                                : item,
+                                            ),
+                                          )
+                                        }
+                                      />
+                                    </label>
+                                    <label>
+                                      已有实验条件（可选）
+                                      <input
+                                        placeholder="例如 siNC，24 h"
+                                        value={sample.conditions}
+                                        onChange={(event) =>
+                                          setExternalSamples((current) =>
+                                            current.map((item, itemIndex) =>
+                                              itemIndex === index
+                                                ? {
+                                                    ...item,
+                                                    conditions:
+                                                      event.target.value,
+                                                  }
+                                                : item,
+                                            ),
+                                          )
+                                        }
+                                      />
+                                    </label>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </fieldset>
                   )}
                   {protocol.fields?.map((field) => {
@@ -727,6 +1207,14 @@ function TaskDrawer({
               )}
             </div>
           </div>
+        )}
+        {creatingProtocol && (
+          <ProtocolCreationWizard
+            sampleTypes={sampleTypes}
+            initialName={protocolQuery.trim()}
+            close={() => setCreatingProtocol(false)}
+            saved={protocolsChanged}
+          />
         )}
       </aside>
     </div>
@@ -1047,7 +1535,17 @@ function ExperimentsPage({
   );
 }
 
-function ProtocolsPage({ protocols }: { protocols: Store["protocols"] }) {
+function ProtocolsPage({
+  protocols,
+  sampleTypes,
+  changed,
+}: {
+  protocols: Store["protocols"];
+  sampleTypes: Store["sampleTypes"];
+  changed: () => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Protocol>();
   return (
     <section className="page">
       <header>
@@ -1056,6 +1554,9 @@ function ProtocolsPage({ protocols }: { protocols: Store["protocols"] }) {
           <h1>实验 Protocol</h1>
           <p className="muted">结构化模板会在创建记录时保存版本快照。</p>
         </div>
+        <button className="primary" onClick={() => setCreating(true)}>
+          ＋ 新增 Protocol
+        </button>
       </header>
       <div className="protocol-grid">
         {protocols.map((protocol) => (
@@ -1070,6 +1571,7 @@ function ProtocolsPage({ protocols }: { protocols: Store["protocols"] }) {
             </i>
             <p>{protocol.category}</p>
             <h2>{protocol.name}</h2>
+            {protocol.description && <p>{protocol.description}</p>}
             <span>当前版本 v{protocol.version}</span>
             <div>
               {protocol.blocks.map((block) => (
@@ -1077,11 +1579,30 @@ function ProtocolsPage({ protocols }: { protocols: Store["protocols"] }) {
               ))}
             </div>
             <footer>
-              <button>查看版本 →</button>
+              <div className="protocol-card-actions">
+                <button onClick={() => setEditing(protocol)}>
+                  编辑 Record 正文
+                </button>
+                <button>查看版本 →</button>
+              </div>
             </footer>
           </article>
         ))}
       </div>
+      {creating && (
+        <ProtocolCreationWizard
+          sampleTypes={sampleTypes}
+          close={() => setCreating(false)}
+          saved={changed}
+        />
+      )}
+      {editing && (
+        <ProtocolTemplateEditor
+          protocol={editing}
+          close={() => setEditing(undefined)}
+          saved={changed}
+        />
+      )}
     </section>
   );
 }
@@ -1134,6 +1655,23 @@ function RecordsPage({
     manifest: Awaited<ReturnType<typeof createExportManifest>>;
   }>();
   const [exportError, setExportError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [editingBody, setEditingBody] = useState(false);
+  const [bodyDraft, setBodyDraft] = useState("");
+  const [bodyError, setBodyError] = useState("");
+  const [savingBody, setSavingBody] = useState(false);
+  const closeRecordView = () => {
+    setDeleteError("");
+    setDeleteConfirmOpen(false);
+    setDeleting(false);
+    setEditingBody(false);
+    setBodyDraft("");
+    setBodyError("");
+    setSavingBody(false);
+    closeRecord();
+  };
   const visibleRecords = sortedRecords.filter((item) => {
     const date = recordDate(item.id);
     return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo);
@@ -1183,6 +1721,45 @@ function RecordsPage({
       await Promise.resolve(window.print());
     } catch (reason) {
       setExportError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+  const removeRecord = async () => {
+    if (!record) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteRecord(record.id);
+      setDeleteConfirmOpen(false);
+      closeRecordView();
+      changed();
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDeleting(false);
+    }
+  };
+  const beginBodyEdit = () => {
+    if (!record) return;
+    setBodyDraft(record.renderedContent || record.notes || "");
+    setBodyError("");
+    setEditingBody(true);
+  };
+  const saveBody = async () => {
+    if (!record) return;
+    if (!bodyDraft.trim()) {
+      setBodyError("实验正文不能为空。");
+      return;
+    }
+    setSavingBody(true);
+    setBodyError("");
+    try {
+      await updateRecordBody(record.id, bodyDraft);
+      setEditingBody(false);
+      changed();
+    } catch (reason) {
+      setBodyError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSavingBody(false);
     }
   };
   return (
@@ -1457,17 +2034,29 @@ function RecordsPage({
         <div className="overlay record-overlay">
           <section className="record-panel">
             <header className="record-header">
-              <button className="back" onClick={closeRecord}>
+              <button className="back" onClick={closeRecordView}>
                 ←
               </button>
               <div>
                 <h1>{record.title}</h1>
                 <p>本地实验记录 · 更新于 {record.updated}</p>
               </div>
-              <button className="secondary" onClick={closeRecord}>
+              <button
+                className="danger"
+                onClick={() => {
+                  setDeleteError("");
+                  setDeleteConfirmOpen(true);
+                }}
+              >
+                删除记录
+              </button>
+              <button className="secondary" onClick={closeRecordView}>
                 完成
               </button>
             </header>
+            {deleteError && (
+              <p className="form-error record-delete-error">{deleteError}</p>
+            )}
             <div className="record-content">
               <article>
                 <section className="record-section">
@@ -1510,10 +2099,48 @@ function RecordsPage({
                       <i>02</i>
                       <h2>实验正文</h2>
                     </div>
+                    {!editingBody && (
+                      <button className="secondary" onClick={beginBodyEdit}>
+                        修改正文
+                      </button>
+                    )}
                   </div>
-                  <p style={{ whiteSpace: "pre-wrap" }}>
-                    {record.renderedContent || record.notes || "暂无正文。"}
-                  </p>
+                  {editingBody ? (
+                    <div className="record-body-editor">
+                      <p className="muted">
+                        仅修改此 Record，不影响 Protocol 模板或其他 Record。
+                      </p>
+                      <textarea
+                        aria-label="实验正文"
+                        value={bodyDraft}
+                        onChange={(event) => setBodyDraft(event.target.value)}
+                      />
+                      {bodyError && <p className="form-error">{bodyError}</p>}
+                      <div className="record-body-actions">
+                        <button
+                          className="secondary"
+                          disabled={savingBody}
+                          onClick={() => {
+                            setEditingBody(false);
+                            setBodyError("");
+                          }}
+                        >
+                          取消
+                        </button>
+                        <button
+                          className="primary"
+                          disabled={savingBody}
+                          onClick={() => void saveBody()}
+                        >
+                          {savingBody ? "保存中…" : "保存正文"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ whiteSpace: "pre-wrap" }}>
+                      {record.renderedContent || record.notes || "暂无正文。"}
+                    </p>
+                  )}
                 </section>
                 {!!record.analysisSections?.length && (
                   <section className="record-section record-analysis-sections">
@@ -1544,6 +2171,42 @@ function RecordsPage({
           </section>
         </div>
       )}
+      {deleteConfirmOpen && record && (
+        <div className="overlay centered record-confirm-overlay">
+          <section
+            className="modal record-delete-confirm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="record-delete-title"
+          >
+            <h2 id="record-delete-title">删除实验记录？</h2>
+            <p>
+              确定删除“{record.title}”吗？删除后，该 Task 会恢复为计划中。若输出
+              Sample 已被下游使用，系统会阻止删除。
+            </p>
+            {deleteError && <p className="form-error">{deleteError}</p>}
+            <div className="record-delete-actions">
+              <button
+                className="secondary"
+                disabled={deleting}
+                onClick={() => {
+                  setDeleteConfirmOpen(false);
+                  setDeleteError("");
+                }}
+              >
+                取消
+              </button>
+              <button
+                className="danger"
+                disabled={deleting}
+                onClick={() => void removeRecord()}
+              >
+                {deleting ? "删除中…" : "确认删除"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
@@ -1561,15 +2224,48 @@ function TaskModal({
   done: () => void;
   cancel: () => void;
 }) {
+  const initiallyEligibleParentIds = new Set(
+    eligibleParentTaskOptions(
+      tasks,
+      task.experimentId,
+      task.id,
+      task.start.slice(0, 16),
+    ).map((candidate) => candidate.id),
+  );
+  const initialParentTaskIds = (task.parentTaskIds || []).filter((id) =>
+    initiallyEligibleParentIds.has(id),
+  );
   const [title, setTitle] = useState(task.title),
     [experimentId, setExperimentId] = useState(task.experimentId),
     [newExperiment, setNewExperiment] = useState(false),
     [newExperimentName, setNewExperimentName] = useState(""),
-    [parentTaskIds, setParentTaskIds] = useState(task.parentTaskIds || []),
+    [parentTaskIds, setParentTaskIds] = useState(initialParentTaskIds),
+    [prunedParentCount, setPrunedParentCount] = useState(
+      (task.parentTaskIds || []).length - initialParentTaskIds.length,
+    ),
     [start, setStart] = useState(task.start.slice(0, 16)),
     [end, setEnd] = useState(task.end.slice(0, 16)),
     [error, setError] = useState("");
   const editing = Boolean(task.title);
+  const parentTaskOptions = eligibleParentTaskOptions(
+    tasks,
+    experimentId,
+    task.id,
+    start,
+  );
+  const changeStart = (nextStart: string) => {
+    const eligibleIds = new Set(
+      eligibleParentTaskOptions(tasks, experimentId, task.id, nextStart).map(
+        (candidate) => candidate.id,
+      ),
+    );
+    const retained = parentTaskIds.filter((id) => eligibleIds.has(id));
+    setPrunedParentCount(
+      (current) => current + parentTaskIds.length - retained.length,
+    );
+    setParentTaskIds(retained);
+    setStart(nextStart);
+  };
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!title.trim()) return setError("Task 名称是必填项。");
@@ -1608,119 +2304,125 @@ function TaskModal({
   };
   return (
     <div className="overlay centered">
-      <form className="modal task-form" onSubmit={save}>
+      <form className="modal task-form task-modal" onSubmit={save}>
         <button className="close" type="button" onClick={cancel}>
           ×
         </button>
-        <p className="eyebrow">CALENDAR TASK</p>
-        <h2>{editing ? "编辑任务" : "新建任务"}</h2>
-        <p>任务将直接保存到本机 LabFlow 数据库。</p>
-        <label>
-          任务名称
-          <input
-            autoFocus
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-        </label>
-        <label>
-          归属 Experiment
-          <select
-            disabled={newExperiment}
-            value={experimentId}
-            onChange={(e) => {
-              setExperimentId(e.target.value);
+        <div className="task-form-scroll">
+          <p className="eyebrow">CALENDAR TASK</p>
+          <h2>{editing ? "编辑任务" : "新建任务"}</h2>
+          <p>任务将直接保存到本机 LabFlow 数据库。</p>
+          <label>
+            任务名称
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </label>
+          <label>
+            归属 Experiment
+            <select
+              disabled={newExperiment}
+              value={experimentId}
+              onChange={(e) => {
+                setExperimentId(e.target.value);
+                setParentTaskIds([]);
+                setPrunedParentCount(0);
+              }}
+            >
+              <option value="">选择已有 Experiment</option>
+              {experiments.map((e) => (
+                <option value={e.id} key={e.id}>
+                  {e.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="link-button"
+            type="button"
+            onClick={() => {
+              setNewExperiment(!newExperiment);
               setParentTaskIds([]);
+              setPrunedParentCount(0);
+              setError("");
             }}
           >
-            <option value="">选择已有 Experiment</option>
-            {experiments.map((e) => (
-              <option value={e.id} key={e.id}>
-                {e.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          className="link-button"
-          type="button"
-          onClick={() => {
-            setNewExperiment(!newExperiment);
-            setParentTaskIds([]);
-            setError("");
-          }}
-        >
-          {newExperiment ? "使用已有 Experiment" : "＋ 在此新建 Experiment"}
-        </button>
-        {newExperiment && (
-          <label>
-            Experiment 名称
-            <input
-              value={newExperimentName}
-              onChange={(e) => setNewExperimentName(e.target.value)}
-            />
-          </label>
-        )}
-        {!newExperiment && experimentId && (
-          <fieldset className="task-dependencies">
-            <legend>上级 Task（可多选）</legend>
-            <p>当前任务将依赖所选任务；系统会阻止跨 Experiment 和循环关系。</p>
-            {tasks
-              .filter(
-                (candidate) =>
-                  candidate.experimentId === experimentId &&
-                  candidate.id !== task.id,
-              )
-              .map((candidate) => (
-                <label key={candidate.id}>
-                  <input
-                    type="checkbox"
-                    checked={parentTaskIds.includes(candidate.id)}
-                    onChange={(event) =>
-                      setParentTaskIds((current) =>
-                        event.target.checked
-                          ? [...current, candidate.id]
-                          : current.filter((id) => id !== candidate.id),
-                      )
-                    }
-                  />
-                  <span>
-                    <b>{candidate.title}</b>
-                    <small>
-                      {dayLabel(candidate.start)} ·{" "}
-                      {formatTime(candidate.start)}
-                    </small>
-                  </span>
-                </label>
-              ))}
-            {tasks.filter(
-              (candidate) =>
-                candidate.experimentId === experimentId &&
-                candidate.id !== task.id,
-            ).length === 0 && <p>当前 Experiment 暂无可选的上级 Task。</p>}
-          </fieldset>
-        )}
-        <div className="time-grid">
-          <label>
-            开始时间
-            <input
-              type="datetime-local"
-              step="3600"
-              value={start}
-              onChange={(e) => setStart(e.target.value)}
-            />
-          </label>
-          <label>
-            结束时间
-            <input
-              type="datetime-local"
-              step="3600"
-              value={end}
-              onChange={(e) => setEnd(e.target.value)}
-            />
-          </label>
+            {newExperiment ? "使用已有 Experiment" : "＋ 在此新建 Experiment"}
+          </button>
+          {newExperiment && (
+            <label>
+              Experiment 名称
+              <input
+                value={newExperimentName}
+                onChange={(e) => setNewExperimentName(e.target.value)}
+              />
+            </label>
+          )}
+          <div className="time-grid">
+            <label>
+              开始时间
+              <input
+                type="datetime-local"
+                step="3600"
+                value={start}
+                onChange={(e) => changeStart(e.target.value)}
+              />
+            </label>
+            <label>
+              结束时间
+              <input
+                type="datetime-local"
+                step="3600"
+                value={end}
+                onChange={(e) => setEnd(e.target.value)}
+              />
+            </label>
+          </div>
+          {!newExperiment && experimentId && (
+            <fieldset className="task-dependencies">
+              <legend>上级 Task（可多选）</legend>
+              <p>
+                只显示当前 Task 开始时间之前的同 Experiment
+                Task，并按时间顺序排列。
+              </p>
+              {prunedParentCount > 0 && (
+                <p className="task-dependency-warning">
+                  已移除 {prunedParentCount} 个不再早于当前 Task 的上级关系。
+                </p>
+              )}
+              <div className="task-dependency-options">
+                {parentTaskOptions.map((candidate) => (
+                  <label key={candidate.id}>
+                    <input
+                      type="checkbox"
+                      checked={parentTaskIds.includes(candidate.id)}
+                      onChange={(event) =>
+                        setParentTaskIds((current) =>
+                          event.target.checked
+                            ? [...current, candidate.id]
+                            : current.filter((id) => id !== candidate.id),
+                        )
+                      }
+                    />
+                    <span>
+                      <b>{candidate.title}</b>
+                      <small>
+                        {dayLabel(candidate.start)} ·{" "}
+                        {formatTime(candidate.start)}
+                      </small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {parentTaskOptions.length === 0 && (
+                <p>当前 Experiment 暂无符合时间条件的上级 Task。</p>
+              )}
+            </fieldset>
+          )}
+          {error && <p className="form-error">{error}</p>}
         </div>
-        {error && <p className="form-error">{error}</p>}
         <footer>
           <button type="button" className="secondary" onClick={cancel}>
             取消

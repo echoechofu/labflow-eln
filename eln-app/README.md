@@ -14,6 +14,7 @@ LabFlow 是一个 local-first 的 macOS 实验管理与电子实验记录本（E
 - Protocol 驱动的 Sample/Result：支持输入选择、消耗、派生、孔板分孔、Result 与 Sample 分离及内部 lineage 完整性。
 - qPCR、ELISA、CCK-8 共用独立的 Plate Mapping 与 Raw Data 骨架：保存 Sample × 检测项目映射、CSV/TSV 原文件及按孔位形成的 join dataset；当前不包含计算或分析 Result。
 - Records 按 Task 的实验日期分组；可选择日期/记录后合并预览，并通过 macOS 系统打印面板保存 PDF。
+- 数据管理可一键导出完整 `.labflow-backup` 工作区，并在校验 SQLite、外键、相对路径和文件 checksum 后恢复；导入前自动保留当前工作区恢复点。
 - 导出清单、附件与 SQLite 均与源码目录隔离。
 
 本归档不包含云同步、多人协作、自由图编辑、Protocol Builder 或任意 Word/PDF 自动转换为可执行 Protocol。
@@ -73,6 +74,16 @@ npm run tauri:build
 ```text
 src-tauri/target/release/bundle/macos/LabFlow.app
 ```
+
+## macOS 下载与安装
+
+从 [GitHub Releases](https://github.com/echoechofu/labflow-eln/releases/latest) 下载 `LabFlow-0.1.0-Apple-Silicon.zip`，解压后将 `LabFlow.app` 拖入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
+
+当前发布包尚未经过 Apple Developer ID 签名与公证。首次启动若被 macOS 拦截，请在“应用程序”中按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次；不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
+
+## 使用许可
+
+LabFlow 采用 [PolyForm Noncommercial License 1.0.0](../LICENSE)。允许下载、个人使用、教学、学术研究、非商业研究、修改和非商业分发；**不允许商业使用**。商业授权请通过仓库 Issue 联系项目维护者。
 
 ## 工程检查
 
