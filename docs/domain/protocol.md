@@ -43,6 +43,8 @@ Protocol 的活跃版本可在启动时随内置 catalog 升级；新的 schema 
 
 创建的 Record 保存当时 schema 的副本和渲染后正文。历史 Record 的展示和 export 读取自身保存的数据，不重新读取 active Protocol 模板。
 
+用户可以删除自己创建的 Protocol。删除事务移除 `protocols` 主记录及全部 `protocol_versions`，但不会删除创建 Protocol 时注册的 Sample Type，也不会修改任何历史 Record。`records.protocol_id` 只保留为历史标识；Record 名称、版本、Terminal Assay 定义、展示与导出均读取 `protocol_snapshot_json`。内置 Protocol 由 catalog 管理，不允许删除。若旧 Record 的 snapshot 缺少名称或完整 schema，系统会拒绝删除，避免历史功能静默损坏。
+
 ## Future design constraints（尚未实现）
 
 - Word/PDF/结构化文件上传导入尚未实现。

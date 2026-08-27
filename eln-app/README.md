@@ -32,7 +32,7 @@ React UI
 
 ## Documentation
 
-长期维护文档位于 [`../docs/`](../docs/)，涵盖当前产品边界、核心工作流、领域模型、Protocol 与 Sample lineage、架构/数据库说明，以及已接受的架构决策（ADR）。
+长期维护文档位于 [`../docs/`](../docs/)，涵盖当前产品边界、核心工作流、领域模型、Protocol 与 Sample lineage、架构/数据库说明，以及已接受的架构决策（ADR）。测试用户可直接阅读 [LabFlow 0.1.0 用户手册](../docs/product/user-guide.md)。
 
 ## 用户数据与源码隔离
 
@@ -84,6 +84,22 @@ src-tauri/target/release/bundle/macos/LabFlow.app
 ## 使用许可
 
 LabFlow 采用 [PolyForm Noncommercial License 1.0.0](../LICENSE)。允许下载、个人使用、教学、学术研究、非商业研究、修改和非商业分发；**不允许商业使用**。商业授权请通过仓库 Issue 联系项目维护者。
+
+## 让 Agent（WorkBuddy / Codex）控制 LabFlow
+
+仓库提供完整的 MCP server + skill 组合，可被任何本地 Agent 复用：
+
+- release 二进制：`eln-app/src-tauri/target/release/labflow-mcp`（stdio JSON-RPC）
+- umbrella skill：`.agents/skills/labflow-agent/SKILL.md`
+- 配套 module skill：`.agents/skills/labflow-calendar/SKILL.md`
+
+一键安装（macOS）：
+
+```bash
+./scripts/install-labflow-mcp.sh
+```
+
+脚本会：构建 release binary、把 skill 装到 `~/.workbuddy/skills/`、把 server 写到 `~/.workbuddy/mcp.json`、若 `codex` CLI 在 PATH则自动 `codex mcp add labflow`，并跑一次 stdio smoke test。手工/跨平台步骤见 [`docs/setup/labflow-agent-install.md`](../docs/setup/labflow-agent-install.md)。
 
 ## 工程检查
 

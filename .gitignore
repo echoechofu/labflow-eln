@@ -2,6 +2,9 @@
 /*
 !/.gitignore
 !/LICENSE
+!/.agents/
+!/.agents/skills/
+!/.agents/skills/**
 !/eln-app/
 !/eln-app/**
 !/docs/

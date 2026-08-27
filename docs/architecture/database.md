@@ -4,6 +4,8 @@
 
 `src-tauri/src/schema.sql` 提供新数据库的基础表、索引、CHECK 和 trigger。应用启动时 `apply_schema` 还会补加早期数据库缺少的列（例如 Sample metadata、归档/lineage 状态、Task 创建/更新时间），启用外键，并做有限的数据规范化/修复。因此当前有效 schema 是基础 SQL 加启动期的兼容性演进，而非单一静态 SQL 文件。
 
+正式 Desktop 与本地 MCP 会打开同一工作区数据库。初始化统一启用 SQLite WAL 和 5 秒 busy timeout，使两个本地进程的读写可以按 SQLite 事务边界协调；领域写入仍必须由 service transaction 完成，不能依赖 WAL 代替业务原子性。
+
 数据库没有单独的 migration-state 表；schema 通过 `CREATE ... IF NOT EXISTS`、列存在性检查与受限数据更新演进。Node 开发兼容层有较早的最小 schema，用于基础网页兼容和旧库验证；正式桌面以 Rust `apply_schema` 为准。
 
 ## 核心表组
@@ -30,6 +32,7 @@
 - `sample_usages` 对 `usage_type='consumed'` 建立部分唯一索引，限制单次破坏性消耗。
 - Sample 类型 insert/update trigger 拒绝非大写值。
 - `sample_types.canonical_type` 为大写主键；Protocol 创建事务使用 `INSERT OR IGNORE` 注册用户类型，避免重复类型行。
+- `records.protocol_id` 是冻结 Record 的历史来源标识，不再外键依赖 `protocols`；正式数据迁移会幂等重建旧 `records` 表并执行 `foreign_key_check`。因此用户 Protocol 可以在不破坏历史 Record 的情况下删除。
 - `samples.origin` 区分 `internal` 产物与用户登记的 `external` roots。external root 的 `source_record_id`、`parent_sample_id` 为空；内部派生继续使用这些字段、`sample_relations` 和 event link 表。
 - Record 启动 transaction 可先插入 external roots，再验证并写入实际 ProcessEvent、usage 和输出；任一步失败时新登记 Sample 也会回滚。
 - `attachments.relative_path`、`export_manifests.relative_path` 的 CHECK 拒绝以 `/` 开头的绝对路径；应用层还要求附件在 `files/` 下。
@@ -46,6 +49,6 @@ qPCR ΔCt table 的 `config_json` 保存目的/内参角色、纳入 measurement
 
 ## 历史、覆盖与保留
 
-Protocol 模板修改插入新的 user `protocol_versions` 行并切换 active version，不 UPDATE 旧 schema；内置 catalog 同步只在当前 active version 仍为 builtin 时自动切换到更新的 builtin version。Protocol 版本不会回写已存在 Record 的 snapshot/首次渲染正文。用户显式修订单条 Record 正文时，focused command 只更新 `current_data_json.renderedContent` 和 `updated_at`，并在同一 transaction 写入 `record_changes`；不变更 Protocol snapshot 或 Sample lineage。qPCR Analysis 允许在其后追加新的冻结分析文字，但不覆盖旧正文或已有分析 section。Sample 或 ProcessEvent 有下游 lineage 时采用归档（`archived_at`）而不是删除。Record 变更表与实体变更表提供审计存放位置，但当前 schema 没有把所有表更新都强制写入 audit，也没有通用的数据库级“Record 不可 UPDATE”trigger。历史保留的实际强制程度应以各 focused command 的 transaction 和约束为准。
+Protocol 模板修改插入新的 user `protocol_versions` 行并切换 active version，不 UPDATE 旧 schema；内置 catalog 同步只在当前 active version 仍为 builtin 时自动切换到更新的 builtin version。用户删除自建 Protocol 时，同一 transaction 删除其全部 version 和主记录；已注册 Sample Type 保留。Protocol 修改或删除都不会回写已存在 Record 的 snapshot/首次渲染正文。用户显式修订单条 Record 正文时，focused command 只更新 `current_data_json.renderedContent` 和 `updated_at`，并在同一 transaction 写入 `record_changes`；不变更 Protocol snapshot 或 Sample lineage。qPCR Analysis 允许在其后追加新的冻结分析文字，但不覆盖旧正文或已有分析 section。Sample 或 ProcessEvent 有下游 lineage 时采用归档（`archived_at`）而不是删除。Record 变更表与实体变更表提供审计存放位置，但当前 schema 没有把所有表更新都强制写入 audit，也没有通用的数据库级“Record 不可 UPDATE”trigger。历史保留的实际强制程度应以各 focused command 的 transaction 和约束为准。
 
 Record 删除由 focused transaction 实施：先检查 export manifest 与输出 Sample 的跨 Record/Event/Mapping 下游引用；通过后按外键顺序删除分析、raw/mapping、事件、usage、Record links、附件元数据和该 Record 产生的内部输出 Sample，并把 Task 恢复为 `planned`。附件目录在 transaction 成功后从 canonical `files/` 中删除。阻断检查失败时不写入任何变化。

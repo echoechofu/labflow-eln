@@ -1,0 +1,13 @@
+interface:
+  display_name: "LabFlow Agent"
+  short_description: "LabFlow Agent interaction contract"
+  default_prompt: "Read $labflow-agent before calling any LabFlow MCP tool. Treat LabFlow MCP as the only interface to live LabFlow data."
+
+dependencies:
+  skills:
+    - type: "skill"
+      value: "labflow-calendar"
+      description: "Calendar / Task workflow conventions for the LabFlow Agent Interface (load when working with Tasks)."
+
+policy:
+  allow_implicit_invocation: true

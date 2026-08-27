@@ -101,6 +101,15 @@ export interface RecordItem {
   taskId: string;
   experimentId: string;
   protocolId: string;
+  protocolName?: string;
+  protocolSnapshot?: {
+    name?: string;
+    version?: number;
+    schema?: {
+      terminalAssay?: TerminalAssayDefinition;
+      [key: string]: unknown;
+    };
+  };
   title: string;
   updated: string;
   notes: string;

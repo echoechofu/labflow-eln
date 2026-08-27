@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import "./task-modal.css";
 import type { Experiment, NavPage, Protocol, Task } from "./domain";
@@ -12,6 +12,7 @@ import {
 import {
   createExportManifest,
   chooseWorkspaceBackup,
+  deleteProtocol,
   deleteRecord,
   deleteTask,
   loadStore,
@@ -120,8 +121,13 @@ export default function App() {
   // Keep the week the user is viewing when the store refreshes.  Selecting
   // the first persisted task here made a successfully-created task appear to
   // vanish whenever that task belonged to a different week.
-  const load = () => void loadStore().then(setStore);
-  useEffect(load, []);
+  const load = useCallback(() => void loadStore().then(setStore), []);
+  useEffect(load, [load]);
+  useEffect(() => {
+    const refreshAfterExternalWrite = () => load();
+    window.addEventListener("focus", refreshAfterExternalWrite);
+    return () => window.removeEventListener("focus", refreshAfterExternalWrite);
+  }, [load]);
   if (!store) return <main className="page">正在读取本地数据…</main>;
   const nav = [
     ["calendar", "◫", "日历"],
@@ -179,6 +185,7 @@ export default function App() {
         <ProtocolsPage
           protocols={store.protocols}
           sampleTypes={store.sampleTypes}
+          records={store.records}
           changed={load}
         />
       )}
@@ -1514,7 +1521,9 @@ function ExperimentsPage({
                   </span>
                   <b>{node.task.title}</b>
                   <small>
-                    {record ? protocol?.name || "已有 Record" : "尚无 Record"}
+                    {record
+                      ? record.protocolName || protocol?.name || "已有 Record"
+                      : "尚无 Record"}
                   </small>
                   {!node.connected && <em>未关联</em>}
                 </button>
@@ -1538,14 +1547,37 @@ function ExperimentsPage({
 function ProtocolsPage({
   protocols,
   sampleTypes,
+  records,
   changed,
 }: {
   protocols: Store["protocols"];
   sampleTypes: Store["sampleTypes"];
+  records: Store["records"];
   changed: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Protocol>();
+  const [deletingProtocol, setDeletingProtocol] = useState<Protocol>();
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const referencedRecordCount = deletingProtocol
+    ? records.filter((record) => record.protocolId === deletingProtocol.id)
+        .length
+    : 0;
+  const removeProtocol = async () => {
+    if (!deletingProtocol) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteProtocol(deletingProtocol.id);
+      setDeletingProtocol(undefined);
+      changed();
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDeleting(false);
+    }
+  };
   return (
     <section className="page">
       <header>
@@ -1584,6 +1616,17 @@ function ProtocolsPage({
                   编辑 Record 正文
                 </button>
                 <button>查看版本 →</button>
+                {protocol.origin === "user" && (
+                  <button
+                    className="danger"
+                    onClick={() => {
+                      setDeleteError("");
+                      setDeletingProtocol(protocol);
+                    }}
+                  >
+                    删除
+                  </button>
+                )}
               </div>
             </footer>
           </article>
@@ -1603,6 +1646,45 @@ function ProtocolsPage({
           saved={changed}
         />
       )}
+      {deletingProtocol && (
+        <div className="overlay centered protocol-delete-overlay">
+          <section
+            className="modal protocol-delete-confirm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="protocol-delete-title"
+          >
+            <h2 id="protocol-delete-title">删除 Protocol？</h2>
+            <p>
+              确定删除“{deletingProtocol.name}”及其全部模板版本吗？
+              {referencedRecordCount > 0
+                ? `已有 ${referencedRecordCount} 条 Record 使用过它；这些 Record 将继续使用各自冻结的正文和 Protocol snapshot。`
+                : "该 Protocol 尚未创建过 Record。"}
+            </p>
+            <p className="muted">已注册的 Sample Type 不会被删除。</p>
+            {deleteError && <p className="form-error">{deleteError}</p>}
+            <div className="protocol-delete-actions">
+              <button
+                className="secondary"
+                disabled={deleting}
+                onClick={() => {
+                  setDeletingProtocol(undefined);
+                  setDeleteError("");
+                }}
+              >
+                取消
+              </button>
+              <button
+                className="danger"
+                disabled={deleting}
+                onClick={() => void removeProtocol()}
+              >
+                {deleting ? "删除中…" : "确认删除"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
@@ -1621,9 +1703,7 @@ function RecordsPage({
   changed: () => void;
 }) {
   const record = store.records.find((item) => item.id === openedRecordId);
-  const recordProtocol = store.protocols.find(
-    (protocol) => protocol.id === record?.protocolId,
-  );
+  const recordTerminalAssay = record?.protocolSnapshot?.schema?.terminalAssay;
   const taskForRecord = (recordId: string) => {
     const item = store.records.find((candidate) => candidate.id === recordId);
     return store.tasks.find((task) => task.id === item?.taskId);
@@ -1868,7 +1948,7 @@ function RecordsPage({
                         <b>{item.title}</b>
                         <p>
                           {experiment?.code} · {experiment?.title} ·{" "}
-                          {protocol?.name}
+                          {item.protocolName || protocol?.name || item.protocolId}
                         </p>
                       </div>
                       <time>{task?.start.slice(11, 16)}</time>
@@ -1961,7 +2041,8 @@ function RecordsPage({
                     <div>
                       <dt>Protocol</dt>
                       <dd>
-                        {protocol?.name} · v{item.protocolVersion || "snapshot"}
+                        {item.protocolName || protocol?.name || item.protocolId} · v
+                        {item.protocolVersion || "snapshot"}
                       </dd>
                     </div>
                     <div>
@@ -2158,11 +2239,11 @@ function RecordsPage({
                     ))}
                   </section>
                 )}
-                {recordProtocol?.terminalAssay && (
+                {recordTerminalAssay && (
                   <TerminalAssayWorkspace
                     record={record}
                     samples={store.samples}
-                    definition={recordProtocol.terminalAssay}
+                    definition={recordTerminalAssay}
                     changed={changed}
                   />
                 )}

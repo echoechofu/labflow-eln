@@ -7,6 +7,7 @@
 - macOS local-first 桌面应用：React UI 通过 Tauri command 访问本地 SQLite 和用户文件目录。
 - Experiment 管理，以及按 Experiment 归属的 Task 日历；Task 可创建、编辑、删除、开始与完成。日历使用 24 小时周视图。
 - Task 可选择同一 Experiment 的多个上级 Task。系统拒绝自依赖、跨 Experiment 依赖、重复父任务和环；有下游依赖或已有 Record 的 Task 不可删除。
+- 当前 Mac 上的 Codex 可通过本地 stdio MCP 使用 Calendar/Task、Experiment、Protocol（含用户自建 Protocol 删除）和 Record 基础工具；这些操作与 Desktop 共用 Rust service、validation 和 transaction。Codex 不直接访问 SQLite。
 - Experiment 页面可只读展示既有 Task 关系网络（分支、合流、孤立 Task），点击节点打开既有 Task 详情。
 - Task 通过“打开记录”进入 Record 启动流程：已有 Record 时打开它；尚无 Record 时选择 Protocol、填写字段和输入 Sample 后创建。
 - 内置 Protocol：细胞复苏、细胞传代、细胞铺板、细胞加刺激、RNA 提取、逆转录、qPCR、Western Blot、培养上清收集、ELISA、CCK-8。
@@ -22,12 +23,13 @@
 
 - 云同步、多人协作或远程服务端。
 - 两个 LabFlow 工作区的数据合并、部分 Experiment 导入或冲突 ID 改写。
+- Record 创建、Sample、Sample lineage、Terminal Assay、qPCR/ELISA/CCK8 Analysis 的 Agent tools；Cloud、Mobile、remote ChatGPT 与多人 Agent 接入。Experiment CRUD、Protocol 模板读写以及 Record 查询/正文修改/删除已通过本地 MCP 提供。
 - 打包桌面应用中的 localhost/Express API 依赖。
 - Experiment Task Graph 内新增、删除、拖拽或编辑关系；该图只读。
 - Protocol Builder、用户上传 Protocol package，或将任意 Word/PDF 自动转换成可执行 Protocol。
 - Sample lineage 作为面向用户的主要可视化工作流。
-- qPCR ΔCt/ΔΔCt、ELISA 标准曲线、CCK-8 活力归一化等计算，以及分析 Result/统计/绘图产出。
-- XLS/XLSX 或厂商专属二进制 raw parser；当前 raw importer 只接受 UTF-8 CSV/TSV/TXT。
+- ELISA 标准曲线、CCK-8 活力归一化等计算，以及相应分析 Result/统计/绘图产出。qPCR 已实现 ΔCt/ΔΔCt 分析快照。
+- 通用 XLS/XLSX 或厂商专属二进制 raw parser；当前通用 importer 接受 UTF-8 CSV/TSV/TXT，qPCR 另外支持按列名读取 XLSX。
 
 ## 可能扩展、但尚未决定
 

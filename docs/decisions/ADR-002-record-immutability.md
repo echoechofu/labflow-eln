@@ -14,6 +14,8 @@ Protocol 会随内置 catalog 升级而产生新 active version。实验记录�
 
 Record 页面与导出读取 Record 自身保存的 snapshot/正文；Protocol 后续的 active version 更新不回写已有 Record。
 
+`records.protocol_id` 仅作为历史来源标识，不对 `protocols` 建立外键。用户自建 Protocol 可以被删除，历史 Record 继续从 snapshot 读取名称、版本、schema 与 Terminal Assay 定义。删除前 service 会确认所有关联 Record snapshot 完整；内置 Protocol 不允许删除。
+
 用户可以在 Record 详情页显式修改该条 Record 的实验正文。这是针对 `current_data_json.renderedContent` 的 focused update：与 `updated_at` 更新、`record_changes` 旧/新值审计在同一 transaction 中完成。它不修改 `protocol_snapshot_json`、Protocol 版本、其他 Record 或 Sample lineage。
 
 用户可以在 Record 详情页显式删除整条 Record，但这不是对冻结正文的覆盖：系统只在 Record 未进入 export manifest、且其输出 Sample 没有任何下游使用时允许整体删除。删除事务同时清理 Record 自有数据并将 Task 恢复为 `planned`；不满足条件时保持原 Record 不变。

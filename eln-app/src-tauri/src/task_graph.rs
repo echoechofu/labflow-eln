@@ -71,6 +71,18 @@ pub fn replace_parents(
         if task_reaches(transaction, task_id, parent_id)? {
             return Err("Task dependency would create a cycle".into());
         }
+        let parent_is_earlier: bool = transaction
+            .query_row(
+                "SELECT parent.start_time < child.start_time
+                 FROM tasks parent JOIN tasks child ON child.id=?2
+                 WHERE parent.id=?1",
+                params![parent_id, task_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !parent_is_earlier {
+            return Err("Every parent Task must start earlier than its child Task".into());
+        }
         transaction
             .execute(
                 "INSERT INTO task_relations (id,experiment_id,parent_task_id,child_task_id,relation_type,created_at)
@@ -84,6 +96,27 @@ pub fn replace_parents(
                 ],
             )
             .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn validate_temporal_neighbors(connection: &Connection, task_id: &str) -> Result<(), String> {
+    let valid: bool = connection
+        .query_row(
+            "SELECT NOT EXISTS(
+               SELECT 1
+               FROM task_relations relation
+               JOIN tasks parent ON parent.id=relation.parent_task_id
+               JOIN tasks child ON child.id=relation.child_task_id
+               WHERE (relation.parent_task_id=?1 OR relation.child_task_id=?1)
+                 AND parent.start_time >= child.start_time
+             )",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !valid {
+        return Err("Every parent Task must start earlier than its child Task".into());
     }
     Ok(())
 }
@@ -118,14 +151,14 @@ mod tests {
                 [],
             )
             .unwrap();
-        for (id, experiment) in [
-            ("a", "e"),
-            ("b", "e"),
-            ("c", "e"),
-            ("d", "e"),
-            ("x", "other"),
+        for (id, experiment, start, end) in [
+            ("a", "e", "2026-08-24T08:00", "2026-08-24T08:30"),
+            ("b", "e", "2026-08-24T09:00", "2026-08-24T09:30"),
+            ("c", "e", "2026-08-24T10:00", "2026-08-24T10:30"),
+            ("d", "e", "2026-08-24T11:00", "2026-08-24T11:30"),
+            ("x", "other", "2026-08-24T08:00", "2026-08-24T08:30"),
         ] {
-            connection.execute("INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,created_at,updated_at) VALUES (?1,?2,?1,'2026-08-24T08:00','2026-08-24T09:00','planned','now','now')",params![id,experiment]).unwrap();
+            connection.execute("INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,created_at,updated_at) VALUES (?1,?2,?1,?3,?4,'planned','now','now')",params![id,experiment,start,end]).unwrap();
         }
         connection
     }
@@ -162,6 +195,17 @@ mod tests {
             replace_parents(&transaction, "a", "e", &["a".into()], "now")
                 .unwrap_err()
                 .contains("itself")
+        );
+    }
+
+    #[test]
+    fn rejects_parent_that_does_not_start_earlier() {
+        let mut database = database();
+        let transaction = database.transaction().unwrap();
+        assert!(
+            replace_parents(&transaction, "a", "e", &["b".into()], "now")
+                .unwrap_err()
+                .contains("earlier")
         );
     }
 }

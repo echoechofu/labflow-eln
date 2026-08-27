@@ -331,6 +331,15 @@ export async function saveProtocolTemplateVersion(request: {
   );
 }
 
+export async function deleteProtocol(protocolId: string) {
+  desktopOnly();
+  return invoke<{
+    id: string;
+    deleted_versions: number;
+    retained_records: number;
+  }>("delete_protocol", { protocolId });
+}
+
 export interface AssayWorkspace {
   items: {
     id: string;
