@@ -90,7 +90,7 @@ npm run tauri:build:windows
 
 同时下载 `SHA256SUMS.txt`，将它与 ZIP 放在同一目录，先在终端执行 `shasum -a 256 LabFlow-0.1.1-Apple-Silicon.zip`，再用 `cat SHA256SUMS.txt` 查看官方值。两个 Hash 必须完全一致才继续安装。
 
-当前发布包尚未经过 Apple Developer ID 签名与公证。校验通过后，首次启动若被 macOS 拦截，请在“应用程序”中按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次；不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
+当前发布包尚未经过 Apple Developer ID 签名与公证。首次尝试打开后若被 macOS 拦截，请打开“系统设置”→“隐私与安全性”，在“安全性”区域找到 `LabFlow was blocked to protect your Mac`，点击“仍要打开”（Open Anyway），再在确认窗口中点击“打开”。不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
 
 ## Windows 下载与安装
 
