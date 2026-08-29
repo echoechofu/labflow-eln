@@ -77,7 +77,7 @@ src-tauri/target/release/bundle/macos/LabFlow.app
 
 ## macOS 下载与安装
 
-从 [GitHub Releases](https://github.com/echoechofu/labflow-eln/releases/tag/v0.1.1) 下载 `LabFlow-0.1.1-Apple-Silicon.zip`，解压后将 `LabFlow.app` 拖入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
+从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.1) 下载 `LabFlow-0.1.1-Apple-Silicon.zip`，解压后将 `LabFlow.app` 拖入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
 
 当前发布包尚未经过 Apple Developer ID 签名与公证。首次启动若被 macOS 拦截，请在“应用程序”中按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次；不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
 
