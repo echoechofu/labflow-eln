@@ -63,7 +63,7 @@ npm install
 npm run tauri:dev
 ```
 
-构建 macOS 应用：
+构建 macOS MVP 发布包（会为整个 App bundle 加 ad-hoc 签名，再生成 ZIP 和 DMG；不替代未来的 Developer ID 签名与公证）：
 
 ```bash
 npm run tauri:build
@@ -72,7 +72,8 @@ npm run tauri:build
 输出位置：
 
 ```text
-src-tauri/target/release/bundle/macos/LabFlow.app
+src-tauri/target/release/bundle/macos/LabFlow-<version>-Apple-Silicon.zip
+src-tauri/target/release/bundle/macos/LabFlow-<version>-Apple-Silicon.dmg
 ```
 
 Windows 使用 GitHub Actions 的 Windows 托管虚拟机原生构建；在 Windows 开发机上也可执行：

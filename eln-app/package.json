@@ -15,7 +15,8 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --bundles app",
+    "tauri:build": "npm run tauri:build:app && ./scripts/package-macos-unsigned.sh",
+    "tauri:build:app": "tauri build --bundles app",
     "tauri:build:windows": "tauri build --bundles nsis,msi",
     "mcp:build": "cargo +1.98.0 build --release --manifest-path src-tauri/Cargo.toml --bin labflow-mcp",
     "preview": "vite preview"
