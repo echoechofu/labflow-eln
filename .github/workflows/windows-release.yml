@@ -90,7 +90,12 @@ jobs:
             $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
             "$hash  $($installer.Name)"
           }
-          Set-Content -Path $checksumPath -Value $checksumLines -Encoding utf8NoBOM
+          $checksumText = ($checksumLines -join "`n") + "`n"
+          [System.IO.File]::WriteAllText(
+            $checksumPath,
+            $checksumText,
+            [System.Text.UTF8Encoding]::new($false)
+          )
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
