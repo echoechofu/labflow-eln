@@ -23,7 +23,12 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "icon": ["icons/icon.icns"],
-    "macOS": { "minimumSystemVersion": "12.0" }
+    "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"],
+    "macOS": { "minimumSystemVersion": "12.0" },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }

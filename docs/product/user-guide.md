@@ -1,22 +1,26 @@
 # LabFlow 0.1.1 用户手册
 
-本手册适用于 **LabFlow 0.1.1 — Apple Silicon 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。
+本手册适用于 **LabFlow 0.1.1 — macOS / Windows x64 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。
 
 ## 1. 安装与数据位置
 
-1. 从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.1) 下载 `LabFlow-0.1.1-Apple-Silicon.zip`。
-2. 解压后，将 `LabFlow.app` 拖入“应用程序”。
-3. 当前测试版尚未经过 Apple Developer ID 签名和公证。首次启动若被 macOS 拦截，请按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次。
+从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.1) 下载与系统匹配的文件：
 
-当前版本仅支持 Apple Silicon Mac（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
+- Apple Silicon macOS 12+：`LabFlow-0.1.1-Apple-Silicon.zip`；
+- Windows 10/11 x64：优先下载 `LabFlow-0.1.1-Windows-x64-Setup.exe`。
+
+macOS 当前尚未经过 Apple Developer ID 签名和公证。解压后将 `LabFlow.app` 拖入“应用程序”；首次启动若被拦截，请按住 Control 点击 `LabFlow.app`，选择“打开”。
+
+Windows MVP 当前没有 Authenticode 签名。请先核对 SHA-256，然后按 [Windows 安装与 SmartScreen 说明](windows-install.md)安装。
 
 实验数据不会写入 App 安装目录，而是保存在：
 
 ```text
-~/Library/Application Support/LabFlow/
-├── labflow.sqlite
-└── files/
+macOS:   ~/Library/Application Support/LabFlow/
+Windows: %APPDATA%\LabFlow\
 ```
+
+两个平台的目录内都包含 `labflow.sqlite` 和 `files/`。
 
 删除 App 或重新下载 App 不等于删除用户数据。请不要手工移动、修改或删除上述目录；迁移数据时应使用“数据管理”中的工作区备份。
 

@@ -1,0 +1,112 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Public labflow-releases tag to receive the Windows files
+        required: true
+        default: v0.1.1
+        type: string
+      publish:
+        description: Upload the verified files to the public release repository
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-x64:
+    name: Windows 10/11 x64 installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out the private source repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run application checks
+        run: |
+          npm run lint
+          npm test
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build unsigned NSIS and MSI installers
+        run: npm run tauri:build:windows
+
+      - name: Stage, verify, and checksum installers
+        run: |
+          $version = node -p "require('./package.json').version"
+          $output = Join-Path $PWD "release/windows-x64"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          $nsis = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          $msi = Get-ChildItem "src-tauri/target/release/bundle/msi/*.msi" | Select-Object -First 1
+          if (-not $nsis -or -not $msi) {
+            throw "Tauri did not produce both NSIS and MSI installers."
+          }
+
+          $setupName = "LabFlow-$version-Windows-x64-Setup.exe"
+          $msiName = "LabFlow-$version-Windows-x64.msi"
+          Copy-Item $nsis.FullName (Join-Path $output $setupName)
+          Copy-Item $msi.FullName (Join-Path $output $msiName)
+
+          $installers = Get-ChildItem $output -File | Where-Object { $_.Extension -in '.exe', '.msi' }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature $installer.FullName
+            if ($signature.Status -ne 'NotSigned') {
+              throw "MVP policy requires unsigned artifacts, but $($installer.Name) reports $($signature.Status)."
+            }
+          }
+
+          $checksumPath = Join-Path $output "SHA256SUMS-Windows-x64.txt"
+          $checksumLines = foreach ($installer in ($installers | Sort-Object Name)) {
+            $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+            "$hash  $($installer.Name)"
+          }
+          Set-Content -Path $checksumPath -Value $checksumLines -Encoding utf8NoBOM
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabFlow-${{ inputs.release_tag }}-Windows-x64-unsigned
+          path: release/windows-x64/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to the public download repository
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ secrets.LABFLOW_RELEASES_TOKEN }}
+          RELEASE_REPOSITORY: echoechofu/labflow-releases
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "LABFLOW_RELEASES_TOKEN is required when publish=true."
+          }
+          gh release view $env:RELEASE_TAG --repo $env:RELEASE_REPOSITORY | Out-Null
+          gh release upload $env:RELEASE_TAG release/windows-x64/* --repo $env:RELEASE_REPOSITORY --clobber

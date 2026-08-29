@@ -12,7 +12,7 @@ React UI
 
 React 通过 `src/repository.ts` 调用 Tauri command；Rust 在应用启动时解析用户数据路径、创建 `files/`、打开 SQLite、应用 schema 演进并确保内置 Protocol。新工作区不自动写入示例 Experiment、Task 或 Record；领域写入（Task、Protocol execution、lineage、导出）由 Rust transaction 执行，避免 UI 直接操纵 SQLite。
 
-正式打包的 `.app` 使用 Tauri `frontendDist` 中的静态资源，业务运行时不依赖 Express 或 localhost HTTP API。
+正式打包的 macOS `.app` 与 Windows NSIS/MSI 安装版都使用 Tauri `frontendDist` 中的静态资源，业务运行时不依赖 Express 或 localhost HTTP API。
 
 ## 本地 Agent Interface
 
@@ -73,10 +73,13 @@ codex mcp get labflow
 
 ## 本地数据与路径隔离
 
-macOS canonical 用户根目录：
+平台 canonical 用户根目录：
 
 ```text
-~/Library/Application Support/LabFlow/
+macOS:   ~/Library/Application Support/LabFlow/
+Windows: %APPDATA%\LabFlow\
+
+目录内部：
 ├── labflow.sqlite
 ├── files/
     └── exports/

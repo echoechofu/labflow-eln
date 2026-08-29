@@ -3,8 +3,7 @@ use rmcp::{transport::stdio, ServiceExt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let platform_data =
-        dirs::data_dir().ok_or("Cannot resolve the macOS application data directory")?;
+    let platform_data = dirs::data_dir().ok_or("Cannot resolve the application data directory")?;
     let root = canonical_app_data_dir(platform_data);
     let connection = initialize_database_at(&root)?;
     let server = LabFlowMcp::new(connection, root.join("files"))

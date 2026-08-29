@@ -1,19 +1,19 @@
 # LabFlow
 
-LabFlow 是一个 local-first 的 macOS 实验管理与电子实验记录本（ELN）MVP。它将实验、Task、Protocol、Record、Sample、Result 和附件保存在用户本机 SQLite 数据库中；正式桌面运行时不依赖 Express 或 localhost HTTP API。
+LabFlow 是一个 local-first 的 macOS / Windows 实验管理与电子实验记录本（ELN）MVP。它将实验、Task、Protocol、Record、Sample、Result 和附件保存在用户本机 SQLite 数据库中；正式桌面运行时不依赖 Express 或 localhost HTTP API。
 
 ## 当前归档版本
 
 本版本已经具备：
 
-- Tauri macOS 桌面应用、开发模式与 `.app` 打包。
+- Tauri macOS / Windows 桌面应用；macOS 打包 `.app`，Windows 打包 NSIS `.exe` 和 WiX `.msi`。
 - 实验日历：Task 的创建、编辑、删除、状态流转与 24 小时周视图。
 - Experiment 内只读 Task 关系图：支持分支、合流与孤立 Task；点击节点可打开既有 Task 详情。
 - 内置细胞复苏、细胞传代、铺板、刺激、RNA 提取、逆转录、qPCR、WB、上清液、ELISA、CCK-8 等 Protocol 执行流程。
 - Protocol Snapshot：创建 Record 时冻结版本与渲染后的实验正文，后续修改 Protocol 不会改写历史 Record。
 - Protocol 驱动的 Sample/Result：支持输入选择、消耗、派生、孔板分孔、Result 与 Sample 分离及内部 lineage 完整性。
 - qPCR、ELISA、CCK-8 共用独立的 Plate Mapping 与 Raw Data 骨架：保存 Sample × 检测项目映射、CSV/TSV 原文件及按孔位形成的 join dataset；当前不包含计算或分析 Result。
-- Records 按 Task 的实验日期分组；可选择日期/记录后合并预览，并通过 macOS 系统打印面板保存 PDF。
+- Records 按 Task 的实验日期分组；可选择日期/记录后合并预览，并通过系统打印面板保存 PDF。
 - 数据管理可一键导出完整 `.labflow-backup` 工作区，并在校验 SQLite、外键、相对路径和文件 checksum 后恢复；导入前自动保留当前工作区恢复点。
 - 导出清单、附件与 SQLite 均与源码目录隔离。
 
@@ -36,14 +36,14 @@ React UI
 
 ## 用户数据与源码隔离
 
-macOS 的 canonical 用户数据目录固定为：
+正式桌面版的 canonical 用户数据目录为：
 
 ```text
-~/Library/Application Support/LabFlow/
-├── labflow.sqlite
-└── files/
-    └── exports/
+macOS:   ~/Library/Application Support/LabFlow/
+Windows: %APPDATA%\LabFlow\
 ```
+
+两个平台的目录内都包含 `labflow.sqlite` 和 `files/`。
 
 数据库中的附件和导出文件只保存相对路径，例如：
 
@@ -75,11 +75,25 @@ npm run tauri:build
 src-tauri/target/release/bundle/macos/LabFlow.app
 ```
 
+Windows 使用 GitHub Actions 的 Windows 托管虚拟机原生构建；在 Windows 开发机上也可执行：
+
+```powershell
+npm run tauri:build:windows
+```
+
+输出位于 `src-tauri/target/release/bundle/nsis/` 和 `src-tauri/target/release/bundle/msi/`。
+
 ## macOS 下载与安装
 
 从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.1) 下载 `LabFlow-0.1.1-Apple-Silicon.zip`，解压后将 `LabFlow.app` 拖入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
 
 当前发布包尚未经过 Apple Developer ID 签名与公证。首次启动若被 macOS 拦截，请在“应用程序”中按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次；不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
+
+## Windows 下载与安装
+
+Windows 10/11 x64 测试版提供 NSIS `Setup.exe` 和 `.msi`，普通用户优先选择 `Setup.exe`。当前 MVP 明确为未签名发布；下载后应先核对 Release 中的 SHA-256，再按 [Windows 安装与 SmartScreen 说明](../docs/product/windows-install.md)安装。
+
+如果学校、医院或企业策略禁止运行未签名程序，请遵守组织策略并联系 IT 管理员，不要尝试绕过管理控制。
 
 ## 使用许可
 
