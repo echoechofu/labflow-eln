@@ -9,7 +9,7 @@
 - Apple Silicon macOS 12+：`LabFlow-0.1.1-Apple-Silicon.zip`；
 - Windows 10/11 x64：优先下载 `LabFlow-0.1.1-Windows-x64-Setup.exe`。
 
-macOS 当前尚未经过 Apple Developer ID 签名和公证。解压后将 `LabFlow.app` 拖入“应用程序”；首次启动若被拦截，请按住 Control 点击 `LabFlow.app`，选择“打开”。
+macOS 应同时下载 `SHA256SUMS.txt`。先对下载的 ZIP 或 DMG 执行 `shasum -a 256 <文件名>`，再用 `cat SHA256SUMS.txt` 查看官方值；两个 Hash 必须完全一致。当前版本尚未经过 Apple Developer ID 签名和公证；校验通过后，解压并将 `LabFlow.app` 拖入“应用程序”，首次启动若被拦截，请按住 Control 点击 `LabFlow.app`，选择“打开”。
 
 Windows MVP 当前没有 Authenticode 签名。请先核对 SHA-256，然后按 [Windows 安装与 SmartScreen 说明](windows-install.md)安装。
 

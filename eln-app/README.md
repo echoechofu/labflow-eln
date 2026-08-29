@@ -87,7 +87,9 @@ npm run tauri:build:windows
 
 从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.1) 下载 `LabFlow-0.1.1-Apple-Silicon.zip`，解压后将 `LabFlow.app` 拖入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
 
-当前发布包尚未经过 Apple Developer ID 签名与公证。首次启动若被 macOS 拦截，请在“应用程序”中按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次；不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
+同时下载 `SHA256SUMS.txt`，将它与 ZIP 放在同一目录，先在终端执行 `shasum -a 256 LabFlow-0.1.1-Apple-Silicon.zip`，再用 `cat SHA256SUMS.txt` 查看官方值。两个 Hash 必须完全一致才继续安装。
+
+当前发布包尚未经过 Apple Developer ID 签名与公证。校验通过后，首次启动若被 macOS 拦截，请在“应用程序”中按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次；不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
 
 ## Windows 下载与安装
 
