@@ -82,32 +82,6 @@
   border-radius: 10px;
   font-size: 11px;
 }
-.sidebar-foot {
-  margin-top: auto;
-}
-.sidebar-foot p {
-  font-size: 11px;
-  color: var(--muted);
-  display: flex;
-  justify-content: space-between;
-  padding: 10px 12px 4px;
-}
-.sidebar-foot p b {
-  color: #565367;
-}
-.storage {
-  height: 4px;
-  background: #ebeaf1;
-  margin: 0 12px;
-  border-radius: 4px;
-}
-.storage i {
-  display: block;
-  width: 8%;
-  height: 100%;
-  background: var(--purple);
-  border-radius: 4px;
-}
 .page {
   padding: 40px 54px;
   max-width: 1400px;

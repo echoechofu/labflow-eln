@@ -162,15 +162,6 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot">
-          <p>
-            <span>本地数据</span>
-            <b>8%</b>
-          </p>
-          <div className="storage">
-            <i />
-          </div>
-        </div>
       </aside>
       {page === "calendar" && (
         <Calendar

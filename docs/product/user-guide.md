@@ -1,10 +1,10 @@
-# LabFlow 0.1.0 用户手册
+# LabFlow 0.1.1 用户手册
 
-本手册适用于 **LabFlow 0.1.0 — Apple Silicon 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。
+本手册适用于 **LabFlow 0.1.1 — Apple Silicon 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。
 
 ## 1. 安装与数据位置
 
-1. 从 [GitHub Release](https://github.com/echoechofu/labflow-eln/releases/tag/v0.1.0) 下载 `LabFlow-0.1.0-Apple-Silicon.zip`。
+1. 从 [GitHub Release](https://github.com/echoechofu/labflow-eln/releases/tag/v0.1.1) 下载 `LabFlow-0.1.1-Apple-Silicon.zip`。
 2. 解压后，将 `LabFlow.app` 拖入“应用程序”。
 3. 当前测试版尚未经过 Apple Developer ID 签名和公证。首次启动若被 macOS 拦截，请按住 Control 点击 `LabFlow.app`，选择“打开”，再确认一次。
 
