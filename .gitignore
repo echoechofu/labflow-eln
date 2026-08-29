@@ -1,6 +1,9 @@
 # This repository archives the LabFlow application only.
 /*
 !/.gitignore
+!/.github/
+!/.github/workflows/
+!/.github/workflows/**
 !/LICENSE
 !/.agents/
 !/.agents/skills/

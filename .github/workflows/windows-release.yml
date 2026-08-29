@@ -30,6 +30,7 @@ jobs:
     defaults:
       run:
         shell: pwsh
+        working-directory: eln-app
 
     steps:
       - name: Check out the private source repository
@@ -40,6 +41,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: eln-app/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -94,7 +96,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LabFlow-${{ inputs.release_tag }}-Windows-x64-unsigned
-          path: release/windows-x64/*
+          path: eln-app/release/windows-x64/*
           if-no-files-found: error
           retention-days: 30
 
