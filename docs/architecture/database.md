@@ -35,13 +35,13 @@
 - `records.protocol_id` 是冻结 Record 的历史来源标识，不再外键依赖 `protocols`；正式数据迁移会幂等重建旧 `records` 表并执行 `foreign_key_check`。因此用户 Protocol 可以在不破坏历史 Record 的情况下删除。
 - `samples.origin` 区分 `internal` 产物与用户登记的 `external` roots。external root 的 `source_record_id`、`parent_sample_id` 为空；内部派生继续使用这些字段、`sample_relations` 和 event link 表。
 - Record 启动 transaction 可先插入 external roots，再验证并写入实际 ProcessEvent、usage 和输出；任一步失败时新登记 Sample 也会回滚。
-- `attachments.relative_path`、`export_manifests.relative_path` 的 CHECK 拒绝以 `/` 开头的绝对路径；应用层还要求附件在 `files/` 下。
+- `attachments.relative_path`、`attachments.preview_relative_path`、`export_manifests.relative_path` 的 CHECK 拒绝以 `/` 开头的绝对路径；应用层还要求附件在 `files/` 下。
 
 ## SQLite 与用户文件目录的分工
 
-SQLite 保存业务对象、JSON metadata、Record snapshot/正文、审计数据、附件/导出的相对定位符以及 export 内容 hash。二进制附件与导出 manifest 文件保存在 canonical 用户目录的 `files/` 下。manifest 写入成功后才插入数据库元数据；若 insert 失败，代码尝试删除刚创建的 manifest 文件，避免孤立的成功记录。
+SQLite 保存业务对象、JSON metadata、Record snapshot/正文、审计数据、附件/导出的相对定位符以及内容 hash。二进制附件、图片预览与导出 manifest 文件保存在 canonical 用户目录的 `files/` 下。Record 图片使用 `files/<attachment-id>/original.<ext>`；超过预览尺寸或浏览器不能直接显示的 TIFF 另存 `preview.png`，原图不被修改。图片写入、附件元数据、正文引用与审计由共享 service 协调；数据库失败时清理本次创建的附件目录。manifest 写入成功后才插入数据库元数据；若 insert 失败，代码尝试删除刚创建的 manifest 文件，避免孤立的成功记录。
 
-工作区备份不新增业务表。`.labflow-backup` 封装 SQLite Online Backup API 生成的 `database/labflow.sqlite`、完整 `files/` 和 `manifest.json`。manifest 保存备份格式/数据库 schema 版本、App 版本、对象数量、数据库 SHA-256 与逐文件 SHA-256，不保存 canonical 绝对路径。导入只接受 `files/` 下的可迁移 locator，拒绝 path traversal、symlink、未知 entry、更高 schema 版本、不匹配 checksum 或缺失被引用文件的备份。
+工作区备份不新增业务表。`.labflow-backup` 封装 SQLite Online Backup API 生成的 `database/labflow.sqlite`、完整 `files/` 和 `manifest.json`。manifest 保存备份格式/数据库 schema 版本、App 版本、对象数量、数据库 SHA-256 与逐文件 SHA-256，不保存 canonical 绝对路径。导入同时校验原图与预览图 locator，只接受 `files/` 下的可迁移路径，拒绝 path traversal、symlink、未知 entry、更高 schema 版本、不匹配 checksum 或缺失被引用文件的备份。
 
 终末检测 raw 文件也使用 Attachment 相对路径；导入表保存文件 hash、列选择和 metric，measurement 表保存数值/原文本及原行 JSON。`assay_well_mappings` 以 `(plate_id, well_position)` 唯一，raw measurement 以 `(import_id, well_position, metric_key)` 唯一。join 只在读取时连接共同 plate/well，不写回 Sample lineage。通用 parser 支持 UTF-8 CSV/TSV/TXT；qPCR 还可从 XLSX 中定位同时包含 `Well` 与选定 measurement 列的工作表。
 

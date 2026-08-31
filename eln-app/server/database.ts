@@ -48,7 +48,7 @@ export function openDatabase(databasePath: string) {
     CREATE TABLE IF NOT EXISTS sample_types (canonical_type TEXT PRIMARY KEY, display_name TEXT NOT NULL, origin TEXT NOT NULL, created_at TEXT NOT NULL, archived_at TEXT);
     CREATE TABLE IF NOT EXISTS sample_relations (id TEXT PRIMARY KEY, parent_sample_id TEXT NOT NULL REFERENCES samples(id), child_sample_id TEXT NOT NULL REFERENCES samples(id), relation_type TEXT NOT NULL, UNIQUE(parent_sample_id, child_sample_id, relation_type));
     CREATE TABLE IF NOT EXISTS record_samples (record_id TEXT NOT NULL REFERENCES records(id), sample_id TEXT NOT NULL REFERENCES samples(id), role TEXT NOT NULL CHECK(role IN ('input','output')), PRIMARY KEY(record_id, sample_id, role));
-    CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, record_id TEXT NOT NULL REFERENCES records(id), file_name TEXT NOT NULL, relative_path TEXT NOT NULL CHECK(relative_path NOT LIKE '/%'), mime_type TEXT, size INTEGER, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, record_id TEXT NOT NULL REFERENCES records(id), file_name TEXT NOT NULL, relative_path TEXT NOT NULL CHECK(relative_path NOT LIKE '/%'), mime_type TEXT, size INTEGER, created_at TEXT NOT NULL, content_sha256 TEXT, preview_relative_path TEXT CHECK(preview_relative_path NOT LIKE '/%'), width_px INTEGER, height_px INTEGER);
     CREATE TABLE IF NOT EXISTS results (id TEXT PRIMARY KEY, record_id TEXT NOT NULL REFERENCES records(id), result_type TEXT NOT NULL, structured_data_json TEXT NOT NULL, created_at TEXT NOT NULL);
   `);
   const ensureColumn = (table: string, column: string, definition: string) => {
@@ -69,6 +69,14 @@ export function openDatabase(databasePath: string) {
     "origin TEXT NOT NULL DEFAULT 'builtin'",
   );
   ensureColumn("protocol_versions", "created_at", "created_at TEXT");
+  ensureColumn("attachments", "content_sha256", "content_sha256 TEXT");
+  ensureColumn(
+    "attachments",
+    "preview_relative_path",
+    "preview_relative_path TEXT",
+  );
+  ensureColumn("attachments", "width_px", "width_px INTEGER");
+  ensureColumn("attachments", "height_px", "height_px INTEGER");
   ensureColumn(
     "samples",
     "origin",

@@ -1,7 +1,7 @@
 [package]
 name = "labflow"
 default-run = "labflow"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local-first experiment manager"
 license = "PolyForm-Noncommercial-1.0.0"
 edition = "2021"
@@ -27,3 +27,4 @@ dirs = "6"
 rmcp = { version = "0.16", features = ["server", "transport-io", "schemars"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp"] }

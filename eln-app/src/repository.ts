@@ -8,6 +8,7 @@ import {
 import type {
   Experiment,
   Protocol,
+  RecordAttachment,
   RecordItem,
   Sample,
   SampleTypeDefinition,
@@ -264,6 +265,40 @@ export async function updateRecordBody(id: string, renderedContent: string) {
     changeId: uid("record-change"),
     changedAt,
   });
+}
+export async function chooseRecordImage() {
+  desktopOnly();
+  const selected = await open({
+    title: "选择要插入实验记录的图片",
+    multiple: false,
+    directory: false,
+    filters: [
+      {
+        name: "图片",
+        extensions: ["png", "jpg", "jpeg", "webp", "tif", "tiff"],
+      },
+    ],
+  });
+  if (!selected || Array.isArray(selected)) return undefined;
+  return selected;
+}
+export async function insertRecordImage(request: {
+  id: string;
+  recordId: string;
+  sourcePath: string;
+  renderedContent: string;
+  changeId: string;
+  createdAt: string;
+}) {
+  desktopOnly();
+  return invoke<RecordAttachment>("insert_record_image", { request });
+}
+export function recordImagePreviewUrl(attachmentId: string) {
+  if (!isTauri()) return "";
+  const path = `/${encodeURIComponent(attachmentId)}`;
+  return navigator.userAgent.includes("Windows")
+    ? `http://labflow-attachment.localhost${path}`
+    : `labflow-attachment://localhost${path}`;
 }
 export async function updateTaskStatus(id: string, status: Task["status"]) {
   desktopOnly();
@@ -575,6 +610,31 @@ export async function markExportPrintRequested(id: string) {
   desktopOnly();
   await invoke("mark_export_print_requested", { id });
 }
+
+export async function beginRecordPdf() {
+  desktopOnly();
+  const destination = await save({
+    title: "保存低内存 PDF（请选择新的文件名）",
+    defaultPath: `LabFlow-Records-${new Date().toISOString().replace(/[:.]/g, "-")}.pdf`,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!destination) return undefined;
+  return invoke<string>("begin_record_pdf", { destination });
+}
+
+export async function appendRecordPdfPage(
+  id: string,
+  page: number,
+  jpeg: Uint8Array,
+) {
+  await invoke("append_record_pdf_page", jpeg, {
+    headers: { "x-labflow-job": id, "x-labflow-page": String(page) },
+  });
+}
+export const finishRecordPdf = (id: string) =>
+  invoke<string>("finish_record_pdf", { id });
+export const cancelRecordPdf = (id: string) =>
+  invoke<void>("cancel_record_pdf", { id });
 export async function createTreatmentDefinition(treatment: {
   id: string;
   experimentId: string;

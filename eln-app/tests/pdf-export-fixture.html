@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><title>LabFlow PDF fixture</title>
+  <style>
+    body {
+      font: 16px system-ui;
+      margin: 24px;
+    }
+    button {
+      padding: 12px;
+      margin: 5px;
+    }
+    img {
+      width: 620px;
+      border: 1px solid #ccc;
+      display: block;
+      margin-top: 20px;
+    }
+  </style>
+  <h1>隔离 PDF 验证（不连接实验数据）</h1>
+  <button id="run">生成图文示例</button
+  ><button id="stress">生成 100 张图片</button
+  ><button id="cancel">取消</button>
+  <p id="status" role="status">就绪</p>
+  <nav id="pages"></nav>
+  <img id="page" alt="生成的 PDF 页" />
+  <script type="module">
+    import { renderRecordPdf } from "/src/recordPdf.ts";
+    let controller;
+    const status = document.querySelector("#status");
+    const fixture = document.createElement("canvas");
+    fixture.width = 1448;
+    fixture.height = 1448;
+    const ctx = fixture.getContext("2d");
+    ctx.fillStyle = "#f6f4fb";
+    ctx.fillRect(0, 0, 1448, 1448);
+    ctx.fillStyle = "#6555d5";
+    ctx.fillRect(120, 120, 1208, 1208);
+    ctx.fillStyle = "white";
+    ctx.font = "64px sans-serif";
+    ctx.fillText("DEMO / 示例图片", 240, 700);
+    ctx.font = "32px sans-serif";
+    ctx.fillText("仅用于软件验证，不是实验结果", 260, 780);
+    const blob = await new Promise((resolve) => fixture.toBlob(resolve));
+    const imageUrl = URL.createObjectURL(blob);
+    fixture.width = 0;
+    fixture.height = 0;
+    async function run(stress) {
+      controller?.abort();
+      controller = new AbortController();
+      document.querySelector("#run").disabled = true;
+      document.querySelector("#stress").disabled = true;
+      document.querySelector("#pages").replaceChildren();
+      document.querySelector("#page").removeAttribute("src");
+      const blocks = stress
+        ? Array.from({ length: 100 }, (_, i) => ({
+            type: "image",
+            id: String(i),
+            caption: `第 ${i + 1} 张示范图`,
+          }))
+        : [
+            {
+              type: "text",
+              text: "LABFLOW ELECTRONIC LAB NOTEBOOK",
+              size: 22,
+              bold: true,
+            },
+            { type: "text", text: "电子实验记录", size: 48, bold: true },
+            {
+              type: "text",
+              text: "图文导出验证 / Unicode: ΔCt, μL, H₂O, café, 🧪",
+            },
+            {
+              type: "text",
+              text: "记录数量：1\n内容校验：0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            },
+            { type: "break" },
+            {
+              type: "text",
+              text: "2026-08-31 09:00 · 示例 Record",
+              size: 32,
+              bold: true,
+            },
+            {
+              type: "text",
+              text: "实验正文\n这是一份虚构的图文排版测试，图片不代表实验结果。",
+            },
+            {
+              type: "image",
+              id: "demo",
+              caption:
+                "示范图注：保持原始长宽比，不裁剪；原文件不因导出而变化。",
+            },
+            {
+              type: "text",
+              text:
+                "长文本分页验证：\n" +
+                "正文应保持完整，并按照页面边界连续排版。中文、English 和标点混排。\n".repeat(
+                  45,
+                ),
+            },
+            {
+              type: "text",
+              text: "样本\n输入：DEMO-IN\n输出：DEMO-OUT\nResults\n示范数值：1.234\n附件目录\n演示图片.png · files/demo/original.png",
+            },
+          ];
+      try {
+        const result = await renderRecordPdf(blocks, {
+          signal: controller.signal,
+          imageUrl: () => imageUrl,
+          progress: (pages, images) =>
+            (status.textContent = `已保存 ${pages} 页 / ${images} 张图`),
+          writePage: async (bytes, page) => {
+            const result = await fetch(`/__pdf_qa/${page}`, {
+              method: "POST",
+              body: bytes,
+            });
+            if (!result.ok) throw new Error("write failed");
+          },
+        });
+        status.textContent = `完成：${result.pages} 页，${result.images} 张图`;
+        for (let i = 0; i < result.pages; i++) {
+          const button = document.createElement("button");
+          button.textContent = `第 ${i + 1} 页`;
+          button.onclick = () =>
+            (document.querySelector("#page").src = `/__pdf_qa/${i}`);
+          document.querySelector("#pages").append(button);
+        }
+      } catch (error) {
+        status.textContent = `已停止：${error.message}`;
+      } finally {
+        document.querySelector("#run").disabled = false;
+        document.querySelector("#stress").disabled = false;
+      }
+    }
+    document.querySelector("#run").onclick = () => run(false);
+    document.querySelector("#stress").onclick = () => run(true);
+    document.querySelector("#cancel").onclick = () => controller?.abort();
+  </script>
+</html>

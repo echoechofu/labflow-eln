@@ -12,7 +12,7 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 const BACKUP_FORMAT: &str = "labflow-workspace-backup";
 const BACKUP_FORMAT_VERSION: u32 = 1;
-const DATABASE_SCHEMA_VERSION: u32 = 1;
+const DATABASE_SCHEMA_VERSION: u32 = 2;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_UNCOMPRESSED_BYTES: u64 = 50 * 1024 * 1024 * 1024;
 const REQUIRED_TABLES: &[&str] = &[
@@ -218,10 +218,23 @@ fn portable_relative_path(value: &str) -> Result<PathBuf, String> {
 }
 
 fn validate_file_locators(connection: &Connection, extracted_root: &Path) -> Result<(), String> {
-    for query in [
+    let mut queries = vec![
         "SELECT relative_path FROM attachments",
         "SELECT relative_path FROM export_manifests",
-    ] {
+    ];
+    let has_preview_locator: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('attachments') WHERE name='preview_relative_path')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if has_preview_locator {
+        queries.push(
+            "SELECT preview_relative_path FROM attachments WHERE preview_relative_path IS NOT NULL",
+        );
+    }
+    for query in queries {
         let mut statement = connection
             .prepare(query)
             .map_err(|error| error.to_string())?;
@@ -556,6 +569,7 @@ mod tests {
         let files = root.join("files/attachment");
         fs::create_dir_all(&files).unwrap();
         fs::write(files.join("raw.txt"), b"raw-result").unwrap();
+        fs::write(files.join("preview.png"), b"preview-image").unwrap();
         let database = root.join("labflow.sqlite");
         let connection = test_database(&database, "Original");
         connection.execute("INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,record_id) VALUES ('task','exp','Task','2026-01-01','2026-01-01','completed','record')", []).unwrap();
@@ -579,7 +593,7 @@ mod tests {
         connection
             .execute("INSERT INTO event_outputs VALUES ('event','sample')", [])
             .unwrap();
-        connection.execute("INSERT INTO attachments (id,record_id,file_name,relative_path,created_at) VALUES ('attachment','record','raw.txt','files/attachment/raw.txt','now')", []).unwrap();
+        connection.execute("INSERT INTO attachments (id,record_id,file_name,relative_path,created_at,preview_relative_path) VALUES ('attachment','record','raw.txt','files/attachment/raw.txt','now','files/attachment/preview.png')", []).unwrap();
         let archive = root.join("workspace.labflow-backup");
         let exported = export_workspace(
             &connection,
@@ -589,7 +603,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(exported.summary.counts.attachments, 1);
-        assert_eq!(inspect_backup(&archive, &root).unwrap().counts.files, 1);
+        assert_eq!(inspect_backup(&archive, &root).unwrap().counts.files, 2);
 
         connection
             .execute("UPDATE experiments SET title='Changed'", [])
@@ -622,6 +636,10 @@ mod tests {
         assert_eq!(
             fs::read(root.join("files/attachment/raw.txt")).unwrap(),
             b"raw-result"
+        );
+        assert_eq!(
+            fs::read(root.join("files/attachment/preview.png")).unwrap(),
+            b"preview-image"
         );
         assert_eq!(collect_files(&root.join("backups")).unwrap().len(), 1);
         drop(connection);

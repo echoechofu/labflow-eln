@@ -1,6 +1,6 @@
 # LabFlow
 
-LabFlow 是一个 local-first 的 macOS / Windows 实验管理与电子实验记录本（ELN）MVP。它将实验、Task、Protocol、Record、Sample、Result 和附件保存在用户本机 SQLite 数据库中；正式桌面运行时不依赖 Express 或 localhost HTTP API。
+LabFlow 是一个 local-first 的 macOS / Windows 实验管理与电子实验记录本（ELN）MVP。实验、Task、Protocol、Record、Sample、Result 和附件元数据保存在用户本机 SQLite，附件文件保存在同一用户数据目录的 `files/`；正式桌面运行时不依赖 Express 或 localhost HTTP API。
 
 ## 当前归档版本
 
@@ -13,7 +13,8 @@ LabFlow 是一个 local-first 的 macOS / Windows 实验管理与电子实验记
 - Protocol Snapshot：创建 Record 时冻结版本与渲染后的实验正文，后续修改 Protocol 不会改写历史 Record。
 - Protocol 驱动的 Sample/Result：支持输入选择、消耗、派生、孔板分孔、Result 与 Sample 分离及内部 lineage 完整性。
 - qPCR、ELISA、CCK-8 共用独立的 Plate Mapping 与 Raw Data 骨架：保存 Sample × 检测项目映射、CSV/TSV 原文件及按孔位形成的 join dataset；当前不包含计算或分析 Result。
-- Records 按 Task 的实验日期分组；可选择日期/记录后合并预览，并通过系统打印面板保存 PDF。
+- Records 按 Task 的实验日期分组；可合并预览，通过系统打印保存 PDF（最多 8 张图片），或使用支持进度/取消的“低内存 PDF”逐页写盘（图像式 PDF，文字不可选中复制）。
+- 每条 Record 的正文均可插入 PNG、JPEG、WebP 或 TIFF 图片；原图保存在工作区 `files/`，大尺寸图片使用按需加载的预览，合并导出的 PDF 保留图文顺序。
 - 数据管理可一键导出完整 `.labflow-backup` 工作区，并在校验 SQLite、外键、相对路径和文件 checksum 后恢复；导入前自动保留当前工作区恢复点。
 - 导出清单、附件与 SQLite 均与源码目录隔离。
 
@@ -49,6 +50,8 @@ Windows: %APPDATA%\LabFlow\
 
 ```text
 files/exports/<export-id>/manifest.json
+files/<attachment-id>/original.<ext>
+files/<attachment-id>/preview.png
 ```
 
 **数据文件、附件或运行时用户数据出现在 source/project directory 属于 P0 data-integrity failure。**

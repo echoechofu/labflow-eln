@@ -70,7 +70,11 @@ Mapping 和 raw upload 没有强制顺序。原始 UTF-8 CSV/TSV/TXT 文件保�
 
 ## 按日期导出 Record
 
-Records 页面按关联 Task 的 `start_time` 日期整理，而非按 `records.updated_at` 或独立的 performed-at 字段。用户选择日期范围及 Record 后，系统读取 Record snapshot、正文、关联 Sample/Result/Attachment，按 Task 开始时间排序，生成 JSON export manifest 与 SHA-256。manifest 位于用户数据目录的 `files/exports/<export-id>/manifest.json`，随后 UI 调用系统打印能力。
+Records 页面按关联 Task 的 `start_time` 日期整理，而非按 `records.updated_at` 或独立的 performed-at 字段。任意 Record 正文都可通过 `labflow-attachment://<id>` 在文字之间引用图片；原图与必要的缩略预览位于 canonical `files/`，UI 通过受控的 Tauri protocol 按需读取，不向正文写入绝对路径或 Base64。用户选择日期范围及 Record 后，系统读取 Record snapshot、正文、关联 Sample/Result/Attachment，按 Task 开始时间排序，生成 JSON export manifest 与 SHA-256。manifest 位于用户数据目录的 `files/exports/<export-id>/manifest.json`。
+
+预览使用视口感知画布，全局解码并发 1、最多 4 张可见画布，不建立解码缓存；离开视口清空画布，bitmap 使用后 close，图片响应 no-store。服务端读取预览最多 16 MiB、校验最长边不超过 2048 px（兼容旧预览），超过上限或缺失时返回错误。
+
+导出分两条路径：系统打印限制最多 8 个图片引用；低内存 PDF 暂时卸载预览，前端只复用一张 A4 页画布，按图文顺序串行绘制，通过二进制 IPC 发送单页 JPEG，并等待 Rust `pdf_export` 服务落盘后继续。服务限定单一会话、连续页码、RGB JPEG 1240 × 1754、单页不超过 8 MiB、总页数不超过 10000；内存仅保留 PDF 对象偏移，不保留历史页面字节。完成后用同目录硬链接原子发布，不覆盖用户文件；失败/取消 Drop 清理临时文件。异常退出可能遗留 `.pdf-part`，不作为成品发布。低内存 PDF 是图像式输出，文字不可搜索复制。现有 manifest 状态不变，输出成功后标记 `print_requested`；状态更新失败单独报告，不把已保存文件报为丢失。不新增数据库表，不开放 MCP 导出工具。
 
 ## 工作区备份与恢复
 

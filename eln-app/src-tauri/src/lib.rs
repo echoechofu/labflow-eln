@@ -10,10 +10,12 @@ use tauri::{AppHandle, Manager, State};
 pub mod agent_interface;
 pub mod experiment_service;
 mod lineage;
+mod pdf_export;
 mod plate_layout;
 mod protocol_catalog;
 mod protocol_execution;
 pub mod protocol_service;
+pub mod record_attachment_service;
 pub mod record_service;
 mod task_graph;
 pub mod task_service;
@@ -21,6 +23,65 @@ mod terminal_assay;
 mod workspace_backup;
 
 struct DatabaseState(Mutex<Connection>);
+#[derive(Default)]
+struct PdfExportState(Mutex<Option<pdf_export::PdfExport>>);
+
+#[tauri::command(async)]
+fn begin_record_pdf(state: State<PdfExportState>, destination: String) -> Result<String, String> {
+    let mut active = state.0.lock().map_err(|_| "PDF lock poisoned")?;
+    if active.is_some() {
+        return Err("已有 PDF 正在导出，请先完成或取消".into());
+    }
+    let job = pdf_export::PdfExport::begin(Path::new(&destination))?;
+    let id = job.id.clone();
+    *active = Some(job);
+    Ok(id)
+}
+
+#[tauri::command(async)]
+fn append_record_pdf_page(
+    state: State<PdfExportState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let id = request
+        .headers()
+        .get("x-labflow-job")
+        .and_then(|s| s.to_str().ok())
+        .ok_or("缺少 PDF 会话")?;
+    let sequence: usize = request
+        .headers()
+        .get("x-labflow-page")
+        .and_then(|s| s.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .ok_or("缺少 PDF 页码")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("PDF 页必须使用二进制传输".into());
+    };
+    let mut active = state.0.lock().map_err(|_| "PDF lock poisoned")?;
+    let job = active
+        .as_mut()
+        .filter(|job| job.id == id)
+        .ok_or("PDF 会话不存在")?;
+    job.append(sequence, bytes)
+}
+
+#[tauri::command(async)]
+fn finish_record_pdf(state: State<PdfExportState>, id: String) -> Result<String, String> {
+    let mut active = state.0.lock().map_err(|_| "PDF lock poisoned")?;
+    if active.as_ref().map(|job| &job.id) != Some(&id) {
+        return Err("PDF 会话不存在".into());
+    }
+    active.take().unwrap().finish()
+}
+
+#[tauri::command(async)]
+fn cancel_record_pdf(state: State<PdfExportState>, id: String) -> Result<(), String> {
+    let mut active = state.0.lock().map_err(|_| "PDF lock poisoned")?;
+    if active.as_ref().map(|job| &job.id) == Some(&id) {
+        active.take().unwrap().cancel()?;
+    }
+    Ok(())
+}
 
 /// Canonical user-data root. `data_dir()` supplies the OS base directory; the
 /// stable product folder intentionally does not depend on the bundle identifier.
@@ -256,6 +317,20 @@ fn apply_schema(connection: &Connection) -> Result<(), String> {
         "created_at",
         "created_at TEXT",
     )?;
+    ensure_column(
+        connection,
+        "attachments",
+        "content_sha256",
+        "content_sha256 TEXT",
+    )?;
+    ensure_column(
+        connection,
+        "attachments",
+        "preview_relative_path",
+        "preview_relative_path TEXT",
+    )?;
+    ensure_column(connection, "attachments", "width_px", "width_px INTEGER")?;
+    ensure_column(connection, "attachments", "height_px", "height_px INTEGER")?;
     connection
         .execute("UPDATE samples SET sample_type=upper(sample_type)", [])
         .map_err(|error| error.to_string())?;
@@ -713,8 +788,8 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
             results.push(result.map_err(|error| error.to_string())?);
         }
         let mut attachments = Vec::new();
-        let mut attachment_statement = connection.prepare("SELECT id,file_name,relative_path,mime_type,size FROM attachments WHERE record_id=?1 ORDER BY created_at,id").map_err(|error|error.to_string())?;
-        let attachment_rows = attachment_statement.query_map([&id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"fileName":row.get::<_,String>(1)?,"relativePath":row.get::<_,String>(2)?,"mimeType":row.get::<_,Option<String>>(3)?,"size":row.get::<_,Option<i64>>(4)?}))).map_err(|error|error.to_string())?;
+        let mut attachment_statement = connection.prepare("SELECT id,file_name,relative_path,mime_type,size,content_sha256,preview_relative_path,width_px,height_px FROM attachments WHERE record_id=?1 ORDER BY created_at,id").map_err(|error|error.to_string())?;
+        let attachment_rows = attachment_statement.query_map([&id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"fileName":row.get::<_,String>(1)?,"relativePath":row.get::<_,String>(2)?,"mimeType":row.get::<_,Option<String>>(3)?,"size":row.get::<_,Option<i64>>(4)?,"contentSha256":row.get::<_,Option<String>>(5)?,"previewRelativePath":row.get::<_,Option<String>>(6)?,"widthPx":row.get::<_,Option<i64>>(7)?,"heightPx":row.get::<_,Option<i64>>(8)?}))).map_err(|error|error.to_string())?;
         for attachment in attachment_rows {
             attachments.push(attachment.map_err(|error| error.to_string())?);
         }
@@ -1039,6 +1114,24 @@ fn update_record_body(
         &rendered_content,
         &change_id,
         &changed_at,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn insert_record_image(
+    app: AppHandle,
+    state: State<DatabaseState>,
+    request: record_attachment_service::InsertRecordImageRequest,
+) -> Result<record_service::RecordAttachment, String> {
+    let mut connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    record_attachment_service::insert_record_image(
+        &mut connection,
+        &attachments_dir(&app)?,
+        &request,
     )
     .map_err(|error| error.to_string())
 }
@@ -1740,7 +1833,7 @@ fn export_record_snapshot(connection: &Connection, record_id: &str) -> Result<Va
     };
     let samples = linked_rows("SELECT json_object('role',link.role,'id',sample.id,'code',sample.sample_code,'type',sample.sample_type,'displayName',coalesce(sample.display_name,'')) FROM record_samples link JOIN samples sample ON sample.id=link.sample_id WHERE link.record_id=?1 ORDER BY link.role,sample.sample_code")?;
     let results = linked_rows("SELECT json_object('id',id,'type',result_type,'data',json(structured_data_json)) FROM results WHERE record_id=?1 ORDER BY created_at,id")?;
-    let attachments = linked_rows("SELECT json_object('id',id,'fileName',file_name,'relativePath',relative_path,'mimeType',coalesce(mime_type,''),'size',coalesce(size,0)) FROM attachments WHERE record_id=?1 ORDER BY created_at,id")?;
+    let attachments = linked_rows("SELECT json_object('id',id,'fileName',file_name,'relativePath',relative_path,'mimeType',coalesce(mime_type,''),'size',coalesce(size,0),'contentSha256',coalesce(content_sha256,''),'previewRelativePath',coalesce(preview_relative_path,relative_path),'widthPx',coalesce(width_px,0),'heightPx',coalesce(height_px,0)) FROM attachments WHERE record_id=?1 ORDER BY created_at,id")?;
     Ok(json!({
         "id":id,
         "taskId":task_id,
@@ -1874,10 +1967,52 @@ fn mark_export_print_requested(state: State<DatabaseState>, id: String) -> Resul
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol("labflow-attachment", |context, request| {
+            let attachment_id = request
+                .uri()
+                .path()
+                .trim_start_matches('/')
+                .split('/')
+                .next()
+                .unwrap_or("");
+            let result = (|| {
+                let app = context.app_handle();
+                let state = app.state::<DatabaseState>();
+                let connection = state
+                    .0
+                    .lock()
+                    .map_err(|_| "Database lock poisoned".to_string())?;
+                record_attachment_service::load_image_preview(
+                    &connection,
+                    &app_data_dir(app)?,
+                    attachment_id,
+                )
+                .map_err(|error| error.to_string())
+            })();
+            match result {
+                Ok(image) => tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::OK)
+                    .header(tauri::http::header::CONTENT_TYPE, image.mime_type)
+                    .header(tauri::http::header::CACHE_CONTROL, "no-store")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(image.bytes)
+                    .unwrap(),
+                Err(error) => tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::NOT_FOUND)
+                    .header(
+                        tauri::http::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8",
+                    )
+                    .body(error.into_bytes())
+                    .unwrap(),
+            }
+        })
         .setup(|app| {
             let connection =
                 initialize_database(app.handle()).map_err(|error| error.to_string())?;
             app.manage(DatabaseState(Mutex::new(connection)));
+            app.manage(PdfExportState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1887,6 +2022,7 @@ pub fn run() {
             delete_task,
             delete_record,
             update_record_body,
+            insert_record_image,
             update_task_status,
             save_user_protocol,
             save_protocol_template_version,
@@ -1905,6 +2041,10 @@ pub fn run() {
             restore_workspace_backup,
             create_export_manifest,
             mark_export_print_requested,
+            begin_record_pdf,
+            append_record_pdf_page,
+            finish_record_pdf,
+            cancel_record_pdf,
             create_process_event,
             apply_treatment_event,
             create_treatment_definition,

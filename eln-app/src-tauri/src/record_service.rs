@@ -71,6 +71,10 @@ pub struct RecordAttachment {
     pub relative_path: String,
     pub mime_type: Option<String>,
     pub size: Option<i64>,
+    pub content_sha256: Option<String>,
+    pub preview_relative_path: Option<String>,
+    pub width_px: Option<i64>,
+    pub height_px: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,7 +200,7 @@ pub fn get_record(
     }
     let mut attachments = Vec::new();
     let mut statement = connection.prepare(
-        "SELECT id,file_name,relative_path,mime_type,size FROM attachments WHERE record_id=?1 ORDER BY created_at,id",
+        "SELECT id,file_name,relative_path,mime_type,size,content_sha256,preview_relative_path,width_px,height_px FROM attachments WHERE record_id=?1 ORDER BY created_at,id",
     )?;
     let rows = statement.query_map([&id], |row| {
         Ok(RecordAttachment {
@@ -205,6 +209,10 @@ pub fn get_record(
             relative_path: row.get(2)?,
             mime_type: row.get(3)?,
             size: row.get(4)?,
+            content_sha256: row.get(5)?,
+            preview_relative_path: row.get(6)?,
+            width_px: row.get(7)?,
+            height_px: row.get(8)?,
         })
     })?;
     for attachment in rows {
@@ -383,7 +391,7 @@ pub fn list_records(
     }
 
     let mut attachments = connection.prepare(
-        "SELECT record_id,id,file_name,relative_path,mime_type,size FROM attachments
+        "SELECT record_id,id,file_name,relative_path,mime_type,size,content_sha256,preview_relative_path,width_px,height_px FROM attachments
          WHERE record_id IN (SELECT value FROM json_each(?1)) ORDER BY record_id,created_at,id",
     )?;
     let rows = attachments.query_map([&ids_json], |row| {
@@ -395,6 +403,10 @@ pub fn list_records(
                 relative_path: row.get(3)?,
                 mime_type: row.get(4)?,
                 size: row.get(5)?,
+                content_sha256: row.get(6)?,
+                preview_relative_path: row.get(7)?,
+                width_px: row.get(8)?,
+                height_px: row.get(9)?,
             },
         ))
     })?;

@@ -125,19 +125,24 @@ export interface RecordItem {
     savedAt: string;
   }[];
   protocolVersion?: number;
-  attachments?: {
-    id: string;
-    fileName: string;
-    relativePath: string;
-    mimeType?: string;
-    size?: number;
-  }[];
+  attachments?: RecordAttachment[];
   values?: Record<string, string>;
   results?: {
     id: string;
     type: string;
     data: Record<string, unknown>;
   }[];
+}
+export interface RecordAttachment {
+  id: string;
+  fileName: string;
+  relativePath: string;
+  mimeType?: string;
+  size?: number;
+  contentSha256?: string;
+  previewRelativePath?: string;
+  widthPx?: number;
+  heightPx?: number;
 }
 export interface HistoryItem {
   id: string;

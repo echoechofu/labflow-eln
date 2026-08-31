@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import "./task-modal.css";
 import type { Experiment, NavPage, Protocol, Task } from "./domain";
@@ -11,6 +11,12 @@ import {
 } from "./domain";
 import {
   createExportManifest,
+  beginRecordPdf,
+  appendRecordPdfPage,
+  finishRecordPdf,
+  cancelRecordPdf,
+  recordImagePreviewUrl,
+  chooseRecordImage,
   chooseWorkspaceBackup,
   deleteProtocol,
   deleteRecord,
@@ -18,6 +24,7 @@ import {
   loadStore,
   markExportPrintRequested,
   exportWorkspaceBackup,
+  insertRecordImage,
   restoreWorkspaceBackup,
   saveTask,
   startTaskRecord,
@@ -28,6 +35,13 @@ import {
   type Store,
   type WorkspaceBackupSummary,
 } from "./repository";
+import { RecordBody } from "./RecordBody";
+import { recordPdfBlocks, renderRecordPdf } from "./recordPdf";
+import {
+  imageCaptionFromPath,
+  insertImageReference,
+  parseRecordBody,
+} from "./recordBodyFormat";
 import {
   buildTaskGraph,
   TASK_GRAPH_NODE_HEIGHT,
@@ -1723,9 +1737,16 @@ function RecordsPage({
   );
   const [exportPreview, setExportPreview] = useState<{
     records: typeof store.records;
+    store: Store;
     manifest: Awaited<ReturnType<typeof createExportManifest>>;
   }>();
   const [exportError, setExportError] = useState("");
+  const [pdfProgress, setPdfProgress] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfFinishing, setPdfFinishing] = useState(false);
+  const [printMode, setPrintMode] = useState(false);
+  const pdfController = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => pdfController.current?.abort(), []);
   const [deleteError, setDeleteError] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1733,6 +1754,8 @@ function RecordsPage({
   const [bodyDraft, setBodyDraft] = useState("");
   const [bodyError, setBodyError] = useState("");
   const [savingBody, setSavingBody] = useState(false);
+  const [insertingImage, setInsertingImage] = useState(false);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const closeRecordView = () => {
     setDeleteError("");
     setDeleteConfirmOpen(false);
@@ -1741,6 +1764,7 @@ function RecordsPage({
     setBodyDraft("");
     setBodyError("");
     setSavingBody(false);
+    setInsertingImage(false);
     closeRecord();
   };
   const visibleRecords = sortedRecords.filter((item) => {
@@ -1779,19 +1803,121 @@ function RecordsPage({
         recordIds: selectedRecords.map((item) => item.id),
         createdAt: new Date().toISOString(),
       });
-      setExportPreview({ records: selectedRecords, manifest });
+      setExportPreview({ records: selectedRecords, store, manifest });
+      setPdfProgress("");
       setExportError("");
     } catch (reason) {
       setExportError(reason instanceof Error ? reason.message : String(reason));
     }
   };
   const printExport = async () => {
-    if (!exportPreview) return;
+    if (!exportPreview || printMode || pdfController.current) return;
+    const imageCount = exportPreview.records.reduce(
+      (count, item) =>
+        count +
+        parseRecordBody(item.renderedContent || item.notes || "").filter(
+          (segment) => segment.type === "image",
+        ).length,
+      0,
+    );
+    if (imageCount > 8) {
+      setExportError(
+        "本次包含超过 8 张图片，请使用“低内存 PDF”，避免系统打印同时保留全部图片。",
+      );
+      return;
+    }
+    setPrintMode(true);
+    setExportError("");
     try {
+      // Let React mount the small, explicitly bounded print-only image set.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      const images = Array.from(
+        document.querySelectorAll<HTMLImageElement>(
+          ".export-document img[data-record-image]",
+        ),
+      );
+      if (images.length !== imageCount)
+        throw new Error("正文引用的图片附件缺失");
+      for (const image of images) await image.decode();
       await markExportPrintRequested(exportPreview.manifest.id);
       await Promise.resolve(window.print());
     } catch (reason) {
-      setExportError(reason instanceof Error ? reason.message : String(reason));
+      setExportError(
+        reason instanceof Error
+          ? `导出前无法加载全部图片：${reason.message}`
+          : String(reason),
+      );
+    } finally {
+      setPrintMode(false);
+    }
+  };
+  const lowMemoryExport = async () => {
+    if (!exportPreview || pdfController.current || printMode) return;
+    const controller = new AbortController();
+    pdfController.current = controller;
+    setPdfBusy(true);
+    setExportError("");
+    setPdfProgress("请选择保存位置…");
+    let job: string | undefined;
+    try {
+      job = await beginRecordPdf();
+      controller.signal.throwIfAborted();
+      if (!job) {
+        setPdfProgress("");
+        return;
+      }
+      setPdfProgress("正在逐页生成 PDF…");
+      const result = await renderRecordPdf(
+        recordPdfBlocks(
+          exportPreview.records,
+          exportPreview.store,
+          exportPreview.manifest,
+        ),
+        {
+          signal: controller.signal,
+          imageUrl: recordImagePreviewUrl,
+          writePage: (jpeg, sequence) =>
+            appendRecordPdfPage(job!, sequence, jpeg),
+          progress: (pages, images) =>
+            setPdfProgress(`已写入 ${pages} 页 · 已处理 ${images} 张图片`),
+        },
+      );
+      controller.signal.throwIfAborted();
+      setPdfFinishing(true);
+      const path = await finishRecordPdf(job);
+      job = undefined;
+      setPdfProgress(
+        `已保存 ${result.pages} 页、${result.images} 张图片：${path}`,
+      );
+      // Keep the existing manifest status vocabulary: this records a request,
+      // not a new domain-level "PDF succeeded" state.
+      try {
+        await markExportPrintRequested(exportPreview.manifest.id);
+      } catch (reason) {
+        setExportError(`PDF 已保存，但导出审计状态更新失败：${String(reason)}`);
+      }
+    } catch (reason) {
+      if (controller.signal.aborted)
+        setPdfProgress("导出已取消，未完成文件已清理。");
+      else
+        setExportError(
+          `PDF 导出失败：${reason instanceof Error ? reason.message : String(reason)}`,
+        );
+    } finally {
+      if (job) {
+        try {
+          await cancelRecordPdf(job);
+        } catch {
+          setExportError(
+            "PDF 临时文件清理失败，请重启 LabFlow 后检查保存目录中的 .labflow-*.pdf-part 文件。",
+          );
+        }
+      }
+      pdfController.current = undefined;
+      setPdfBusy(false);
+      setPdfFinishing(false);
     }
   };
   const removeRecord = async () => {
@@ -1831,6 +1957,45 @@ function RecordsPage({
       setBodyError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setSavingBody(false);
+    }
+  };
+  const addImageToBody = async () => {
+    if (!record) return;
+    try {
+      const sourcePath = await chooseRecordImage();
+      if (!sourcePath) return;
+      const attachmentId = uid("attachment");
+      const selection =
+        bodyTextareaRef.current?.selectionStart ?? bodyDraft.length;
+      const inserted = insertImageReference(
+        bodyDraft,
+        selection,
+        attachmentId,
+        imageCaptionFromPath(sourcePath),
+      );
+      setInsertingImage(true);
+      setBodyError("");
+      await insertRecordImage({
+        id: attachmentId,
+        recordId: record.id,
+        sourcePath,
+        renderedContent: inserted.content,
+        changeId: uid("record-change"),
+        createdAt: new Date().toISOString(),
+      });
+      setBodyDraft(inserted.content);
+      changed();
+      requestAnimationFrame(() => {
+        bodyTextareaRef.current?.focus();
+        bodyTextareaRef.current?.setSelectionRange(
+          inserted.cursor,
+          inserted.cursor,
+        );
+      });
+    } catch (reason) {
+      setBodyError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setInsertingImage(false);
     }
   };
   return (
@@ -1939,7 +2104,9 @@ function RecordsPage({
                         <b>{item.title}</b>
                         <p>
                           {experiment?.code} · {experiment?.title} ·{" "}
-                          {item.protocolName || protocol?.name || item.protocolId}
+                          {item.protocolName ||
+                            protocol?.name ||
+                            item.protocolId}
                         </p>
                       </div>
                       <time>{task?.start.slice(11, 16)}</time>
@@ -1964,6 +2131,7 @@ function RecordsPage({
             <button
               className="secondary"
               onClick={() => setExportPreview(undefined)}
+              disabled={pdfBusy || printMode}
             >
               返回选择
             </button>
@@ -1971,138 +2139,180 @@ function RecordsPage({
               {exportPreview.manifest.recordCount} 条 · 校验值{" "}
               {exportPreview.manifest.contentSha256.slice(0, 12)}…
             </span>
-            <button className="primary" onClick={() => void printExport()}>
+            <button
+              className="secondary"
+              disabled={pdfBusy || printMode}
+              onClick={() => void printExport()}
+            >
               打印 / 保存 PDF
             </button>
+            <button
+              className="primary"
+              disabled={pdfBusy || printMode}
+              onClick={() => void lowMemoryExport()}
+            >
+              {pdfBusy ? "正在导出…" : "低内存 PDF"}
+            </button>
+            {pdfBusy && (
+              <button
+                className="secondary"
+                disabled={pdfFinishing}
+                onClick={() => pdfController.current?.abort()}
+              >
+                取消
+              </button>
+            )}
           </div>
-          <article className="export-document">
-            <header className="export-cover">
-              <p>LABFLOW ELECTRONIC LAB NOTEBOOK</p>
-              <h1>电子实验记录</h1>
-              <dl>
-                <div>
-                  <dt>日期范围</dt>
-                  <dd>
-                    {recordDate(exportPreview.records[0].id)} —{" "}
-                    {recordDate(exportPreview.records.at(-1)!.id)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>记录数量</dt>
-                  <dd>{exportPreview.records.length}</dd>
-                </div>
-                <div>
-                  <dt>生成时间</dt>
-                  <dd>{new Date().toLocaleString("zh-CN")}</dd>
-                </div>
-                <div>
-                  <dt>内容校验</dt>
-                  <dd>{exportPreview.manifest.contentSha256}</dd>
-                </div>
-              </dl>
-            </header>
-            {exportPreview.records.map((item, index) => {
-              const task = taskForRecord(item.id);
-              const experiment = store.experiments.find(
-                (candidate) => candidate.id === item.experimentId,
-              );
-              const protocol = store.protocols.find(
-                (candidate) => candidate.id === item.protocolId,
-              );
-              const previousDate =
-                index > 0
-                  ? recordDate(exportPreview.records[index - 1].id)
-                  : "";
-              const date = recordDate(item.id);
-              return (
-                <section className="export-record" key={item.id}>
-                  {date !== previousDate && (
-                    <h2 className="export-date">{date}</h2>
-                  )}
-                  <header>
-                    <div>
-                      <h3>{item.title}</h3>
+          <div className="export-job-status" role="status">
+            <p>
+              大量图片请选择“低内存
+              PDF”：逐页保存为图像，文字不可选中复制。需要可复制文字时，可使用系统打印（最多
+              8 张图片）。
+            </p>
+            {pdfProgress && <p>{pdfProgress}</p>}
+            {exportError && (
+              <p className="form-error" role="alert">
+                {exportError}
+              </p>
+            )}
+          </div>
+          {!pdfBusy && (
+            <article className="export-document">
+              <header className="export-cover">
+                <p>LABFLOW ELECTRONIC LAB NOTEBOOK</p>
+                <h1>电子实验记录</h1>
+                <dl>
+                  <div>
+                    <dt>日期范围</dt>
+                    <dd>
+                      {recordDate(exportPreview.records[0].id)} —{" "}
+                      {recordDate(exportPreview.records.at(-1)!.id)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>记录数量</dt>
+                    <dd>{exportPreview.records.length}</dd>
+                  </div>
+                  <div>
+                    <dt>生成时间</dt>
+                    <dd>{new Date().toLocaleString("zh-CN")}</dd>
+                  </div>
+                  <div>
+                    <dt>内容校验</dt>
+                    <dd>{exportPreview.manifest.contentSha256}</dd>
+                  </div>
+                </dl>
+              </header>
+              {exportPreview.records.map((item, index) => {
+                const task = taskForRecord(item.id);
+                const experiment = store.experiments.find(
+                  (candidate) => candidate.id === item.experimentId,
+                );
+                const protocol = store.protocols.find(
+                  (candidate) => candidate.id === item.protocolId,
+                );
+                const previousDate =
+                  index > 0
+                    ? recordDate(exportPreview.records[index - 1].id)
+                    : "";
+                const date = recordDate(item.id);
+                return (
+                  <section className="export-record" key={item.id}>
+                    {date !== previousDate && (
+                      <h2 className="export-date">{date}</h2>
+                    )}
+                    <header>
+                      <div>
+                        <h3>{item.title}</h3>
+                        <p>
+                          {experiment?.code} · {experiment?.title}
+                        </p>
+                      </div>
+                      <time>{task?.start.slice(11, 16)}</time>
+                    </header>
+                    <dl className="export-meta">
+                      <div>
+                        <dt>Protocol</dt>
+                        <dd>
+                          {item.protocolName ||
+                            protocol?.name ||
+                            item.protocolId}{" "}
+                          · v{item.protocolVersion || "snapshot"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Record ID</dt>
+                        <dd>{item.id}</dd>
+                      </div>
+                    </dl>
+                    <section>
+                      <h4>实验正文</h4>
+                      <RecordBody
+                        attachments={item.attachments}
+                        className="export-body"
+                        content={
+                          item.renderedContent || item.notes || "暂无正文。"
+                        }
+                        eager={printMode}
+                      />
+                    </section>
+                    {item.analysisSections?.map((analysis) => (
+                      <section key={analysis.id}>
+                        <h4>{analysis.title}</h4>
+                        <p className="export-body">{analysis.text}</p>
+                      </section>
+                    ))}
+                    <section className="export-samples">
+                      <h4>样本</h4>
                       <p>
-                        {experiment?.code} · {experiment?.title}
+                        输入：
+                        {item.inputs
+                          .map(
+                            (id) =>
+                              store.samples.find((sample) => sample.id === id)
+                                ?.code || id,
+                          )
+                          .join("、") || "无"}
                       </p>
-                    </div>
-                    <time>{task?.start.slice(11, 16)}</time>
-                  </header>
-                  <dl className="export-meta">
-                    <div>
-                      <dt>Protocol</dt>
-                      <dd>
-                        {item.protocolName || protocol?.name || item.protocolId} · v
-                        {item.protocolVersion || "snapshot"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Record ID</dt>
-                      <dd>{item.id}</dd>
-                    </div>
-                  </dl>
-                  <section>
-                    <h4>实验正文</h4>
-                    <p className="export-body">
-                      {item.renderedContent || item.notes || "暂无正文。"}
-                    </p>
+                      <p>
+                        输出：
+                        {item.outputs
+                          .map(
+                            (id) =>
+                              store.samples.find((sample) => sample.id === id)
+                                ?.code || id,
+                          )
+                          .join("、") || "无"}
+                      </p>
+                    </section>
+                    {!!item.results?.length && (
+                      <section>
+                        <h4>Results</h4>
+                        {item.results.map((result) => (
+                          <p key={result.id}>
+                            {result.type} · {JSON.stringify(result.data)}
+                          </p>
+                        ))}
+                      </section>
+                    )}
+                    {!!item.attachments?.length && (
+                      <section>
+                        <h4>附件目录</h4>
+                        {item.attachments.map((attachment) => (
+                          <p key={attachment.id}>
+                            {attachment.fileName} · {attachment.relativePath}
+                          </p>
+                        ))}
+                      </section>
+                    )}
                   </section>
-                  {item.analysisSections?.map((analysis) => (
-                    <section key={analysis.id}>
-                      <h4>{analysis.title}</h4>
-                      <p className="export-body">{analysis.text}</p>
-                    </section>
-                  ))}
-                  <section className="export-samples">
-                    <h4>样本</h4>
-                    <p>
-                      输入：
-                      {item.inputs
-                        .map(
-                          (id) =>
-                            store.samples.find((sample) => sample.id === id)
-                              ?.code || id,
-                        )
-                        .join("、") || "无"}
-                    </p>
-                    <p>
-                      输出：
-                      {item.outputs
-                        .map(
-                          (id) =>
-                            store.samples.find((sample) => sample.id === id)
-                              ?.code || id,
-                        )
-                        .join("、") || "无"}
-                    </p>
-                  </section>
-                  {!!item.results?.length && (
-                    <section>
-                      <h4>Results</h4>
-                      {item.results.map((result) => (
-                        <p key={result.id}>
-                          {result.type} · {JSON.stringify(result.data)}
-                        </p>
-                      ))}
-                    </section>
-                  )}
-                  {!!item.attachments?.length && (
-                    <section>
-                      <h4>附件目录</h4>
-                      {item.attachments.map((attachment) => (
-                        <p key={attachment.id}>
-                          {attachment.fileName} · {attachment.relativePath}
-                        </p>
-                      ))}
-                    </section>
-                  )}
-                </section>
-              );
-            })}
-          </article>
+                );
+              })}
+            </article>
+          )}
         </div>
       )}
-      {record && (
+      {record && !exportPreview && (
         <div className="overlay record-overlay">
           <section className="record-panel">
             <header className="record-header">
@@ -2180,13 +2390,35 @@ function RecordsPage({
                   {editingBody ? (
                     <div className="record-body-editor">
                       <p className="muted">
-                        仅修改此 Record，不影响 Protocol 模板或其他 Record。
+                        仅修改此 Record，不影响 Protocol 模板或其他
+                        Record。插入图片会立即保存当前正文。
                       </p>
                       <textarea
                         aria-label="实验正文"
+                        ref={bodyTextareaRef}
                         value={bodyDraft}
                         onChange={(event) => setBodyDraft(event.target.value)}
                       />
+                      <div className="record-image-insert-row">
+                        <button
+                          className="secondary"
+                          disabled={savingBody || insertingImage}
+                          onClick={() => void addImageToBody()}
+                          type="button"
+                        >
+                          {insertingImage ? "处理图片中…" : "在光标处插入图片"}
+                        </button>
+                        <small>
+                          支持 PNG、JPEG、WebP、TIFF；大图会保留原图并生成预览。
+                        </small>
+                      </div>
+                      <div className="record-body-live-preview">
+                        <b>正文预览</b>
+                        <RecordBody
+                          attachments={record.attachments}
+                          content={bodyDraft || "暂无正文。"}
+                        />
+                      </div>
                       {bodyError && <p className="form-error">{bodyError}</p>}
                       <div className="record-body-actions">
                         <button
@@ -2209,9 +2441,12 @@ function RecordsPage({
                       </div>
                     </div>
                   ) : (
-                    <p style={{ whiteSpace: "pre-wrap" }}>
-                      {record.renderedContent || record.notes || "暂无正文。"}
-                    </p>
+                    <RecordBody
+                      attachments={record.attachments}
+                      content={
+                        record.renderedContent || record.notes || "暂无正文。"
+                      }
+                    />
                   )}
                 </section>
                 {!!record.analysisSections?.length && (
