@@ -1,6 +1,7 @@
 # This repository archives the LabFlow application only.
 /*
 !/.gitignore
+!/README.md
 !/.github/
 !/.github/workflows/
 !/.github/workflows/**
