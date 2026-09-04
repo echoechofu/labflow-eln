@@ -1,13 +1,13 @@
-# LabFlow 0.1.1 用户手册
+# LabFlow 0.1.3 用户手册
 
-本手册适用于 **LabFlow 0.1.1 — macOS / Windows x64 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。
+本手册适用于 **LabFlow 0.1.3 — macOS / Windows x64 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。
 
 ## 1. 安装与数据位置
 
-从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.1) 下载与系统匹配的文件：
+从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.3) 下载与系统匹配的文件：
 
-- Apple Silicon macOS 12+：`LabFlow-0.1.1-Apple-Silicon.zip`；
-- Windows 10/11 x64：优先下载 `LabFlow-0.1.1-Windows-x64-Setup.exe`。
+- Apple Silicon macOS 12+：`LabFlow-0.1.3-Apple-Silicon.zip`；
+- Windows 10/11 x64：优先下载 `LabFlow-0.1.3-Windows-x64-Setup.exe`。
 
 macOS 应同时下载 `SHA256SUMS.txt`。先对下载的 ZIP 或 DMG 执行 `shasum -a 256 <文件名>`，再用 `cat SHA256SUMS.txt` 查看官方值；两个 Hash 必须完全一致。当前版本尚未经过 Apple Developer ID 签名和公证；解压并将 `LabFlow.app` 拖入“应用程序”后，先尝试打开一次。若被拦截，请打开“系统设置”→“隐私与安全性”，在“安全性”区域点击 `LabFlow was blocked to protect your Mac` 旁的“仍要打开”（Open Anyway），再在确认窗口中点击“打开”。
 
@@ -162,7 +162,7 @@ LabFlow 只显示以下可用输入：
 - 派生 Sample 继承对应父 Sample 的 metadata；
 - 保存可渲染的 Record 实验正文模板。
 
-当前向导**不支持**上传 Word/PDF 后自动生成 Protocol，也不能为自建 Protocol 配置任意动态表单、孔板 Mapping、终末检测或专属计算逻辑。这些复杂能力目前只存在于相应内置 Protocol 中。
+当前向导**不支持**上传 Word/PDF 后自动生成 Protocol，也不能为自建 Protocol 配置任意动态表单、图形化手动选孔、终末检测或专属计算逻辑。自建 Protocol 在“产生多个 Sample”下可以选择相同条件或按条件组分配；条件组可选按行优先映射孔板位置。
 
 ### 5.2 从哪里进入
 
@@ -196,10 +196,10 @@ LabFlow 只显示以下可用输入：
 | --- | --- | --- |
 | 原 Sample 继续 | 不创建新 Sample，过程完成后仍指向原 Sample。 | 非破坏性观察或状态记录。 |
 | 产生新的 Sample | 每个输入产生一个输出 Sample。 | RNA → cDNA。 |
-| 产生多个 Sample | 每个输入产生多个同类型输出；创建 Record 时再填写每个输入的产生数量。 | 一份材料分成多份派生对象。 |
+| 产生多个 Sample | 可选择多个输出条件相同，或在创建 Record 时按条件、浓度、处理时间和数量分组；条件分配可选映射孔板位置。 | 传代、平行分装或多条件处理。 |
 | 仅检测，不产生 Sample | 保存 Record 和输入使用情况，但不创建输出 Sample。 | 对既有 Sample 做 measurement-only 检测。 |
 
-选择“产生新的 Sample”或“产生多个 Sample”时，还要选择或新建输出 Sample 类型。
+选择“产生新的 Sample”或“产生多个 Sample”时，还要选择或新建输出 Sample 类型。输出类型与孔板位置相互独立；例如输出可定义为 `CELL`、`PLATE` 或 `DISH`，启用孔位映射只会增加 `plate_position` metadata，不会强制改成 `WELL`。
 
 #### 输入 Sample
 
@@ -282,7 +282,7 @@ Procedure:
 | 细胞复苏 | 无已有 Sample | 新建 CELL。 |
 | 细胞传代 | CELL | 消耗输入，产生一个或多个 CELL。 |
 | 细胞铺板 | CELL | 产生 PLATE 或 DISH。 |
-| 细胞加刺激 | PLATE / DISH / WELL | Plate 可按刺激因素、时间和孔数生成 WELL；Dish/Well 为状态变化。 |
+| 细胞加刺激 | CELL / PLATE / DISH / WELL（每条 Record 只选一种类型，可选多个同类型 Sample） | 每个 Plate 可按同一套刺激因素、时间和孔数生成 WELL；Cell/Dish/Well 为状态变化，并以原 Sample 身份登记为输出。 |
 | RNA Extraction | CELL / WELL / DISH | 消耗输入，每个输入产生一个 RNA。 |
 | Reverse Transcription | RNA | 使用 aliquot，每个输入产生一个 cDNA。 |
 | qPCR | cDNA | 不产生 Sample；使用 Plate Mapping、Raw Cq 和 qPCR Analysis。 |
@@ -290,7 +290,7 @@ Procedure:
 | ELISA | SUP | 不产生 Sample；使用 Plate Mapping 与 Raw OD。 |
 | CCK-8 | WELL | 消耗输入，不产生 Sample；使用 Plate Mapping 与 Raw OD。 |
 
-内置 Protocol 可能包含专属校验和字段。不要用一个简单自建 Protocol 替代孔板分孔、qPCR/ELISA/CCK-8 Mapping 等已经存在的专属流程。
+内置 Protocol 可能包含专属校验和字段。自建 Protocol 的条件分配目前按行优先自动映射位置；需要图形化手动选孔或 qPCR/ELISA/CCK-8 Mapping 时，仍应使用已经存在的专属流程。
 
 ## 7. Record 的查看、修改、删除与导出
 

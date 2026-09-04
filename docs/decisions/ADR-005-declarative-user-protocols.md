@@ -10,7 +10,7 @@ Accepted
 
 ## Decision
 
-第一版用户 Protocol 使用三步创建流程：基本信息、Sample Flow、Record Template。Sample Flow 由受限的 `sample_flow_v1` 执行，只支持直接上级 Task 的单一声明输入类型、保留/消耗 usage，以及原 Sample 继续、每输入派生一个、每输入派生多个、measurement-only 四种输出行为。
+用户 Protocol 使用三步创建流程：基本信息、Sample Flow、Record Template。Sample Flow 由受限的 `sample_flow_v1` 执行，支持当前 Experiment 的单一声明输入类型、保留/消耗 usage，以及原 Sample 继续、每输入派生一个、每输入派生多个、按条件组派生多个、measurement-only 输出行为。按条件分配可选顺序孔位映射；孔位作为 metadata 保存，不限制输出 Sample 类型。
 
 Sample 类型通过独立注册表保存；持久化 canonical value 为大写，展示名独立。派生输出默认继承对应父 Sample metadata，并只补充系统 provenance，不要求重新填写 group、stimulus、time，也不把 Record 字段整体复制到 Sample metadata。
 
@@ -20,7 +20,7 @@ Sample 类型通过独立注册表保存；持久化 canonical value 为大写�
 
 - 简单材料转化、拆分、继续和 measurement-only Protocol 可由用户创建，无需增加 Rust 名称分支。
 - 用户不能通过 Protocol 执行 JavaScript、Rust 或 SQL。
-- 孔板布局、终末检测、专属计算和复杂动态字段仍使用内置能力，尚未成为通用 DSL。
+- 用户 Protocol 可按条件组生成多个 Sample，并可选映射顺序孔位；图形化手动选孔、终末检测、专属计算和复杂动态字段仍使用内置能力。
 - 新类型、Protocol 和 version 都保存在 canonical 用户 SQLite 中，与源代码隔离。
 
 ## Alternatives considered

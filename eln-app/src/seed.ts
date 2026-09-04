@@ -100,8 +100,8 @@ export const protocols: Protocol[] = [
     id: "pro-cell-treatment",
     name: "细胞加刺激",
     category: "细胞培养",
-    version: 3,
-    blocks: ["选择孔板", "刺激分组", "输出孔样本"],
+    version: 5,
+    blocks: ["选择同一类型的一个或多个 Sample", "填写对应刺激条件", "生成 Record"],
     accent: "#167c80",
   },
   {

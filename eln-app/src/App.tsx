@@ -92,6 +92,13 @@ type PlateTreatmentGroup = {
   wellCount: number;
 };
 
+type SampleConditionGroup = {
+  condition: string;
+  dose: string;
+  duration: string;
+  sampleCount: number;
+};
+
 const plateCapacity = (value: unknown) => {
   const text = String(value ?? "");
   const chineseCapacity = [
@@ -579,6 +586,7 @@ function TaskDrawer({
   const [activeSampleGroup, setActiveSampleGroup] =
     useState<SampleSourceKind>("direct_parent");
   const [externalSampleType, setExternalSampleType] = useState("");
+  const [externalPlateFormat, setExternalPlateFormat] = useState("");
   const [externalSampleCount, setExternalSampleCount] = useState(1);
   const [externalSamples, setExternalSamples] = useState<
     { displayName: string; conditions: string }[]
@@ -586,6 +594,9 @@ function TaskDrawer({
   const [plateGroups, setPlateGroups] = useState<PlateTreatmentGroup[]>([
     { factor: "", duration: "", wellCount: 1 },
   ]);
+  const [conditionGroups, setConditionGroups] = useState<
+    SampleConditionGroup[]
+  >([{ condition: "", dose: "", duration: "", sampleCount: 1 }]);
   const protocolResults = searchProtocols(protocols, protocolQuery);
   const closeProtocolPicker = () => {
     setChoosingProtocol(false);
@@ -593,6 +604,10 @@ function TaskDrawer({
     setProtocol(undefined);
     setProtocolQuery("");
   };
+  const usesExperimentSampleInput = [
+    "parent_task_outputs",
+    "experiment_samples",
+  ].includes(protocol?.execution?.inputSource || "");
   const selectedInput = samples.find(
     (sample) => sample.id === values.input_sample,
   );
@@ -600,15 +615,51 @@ function TaskDrawer({
     (selectedInput && normalizeSampleType(selectedInput.type)) ||
     ({ 孔板: "PLATE", 培养皿: "DISH", 孔: "WELL" }[values.new_object_type] as
       string | undefined);
-  const selectedPlateCapacity =
-    plateCapacity(selectedInput?.metadata?.plate_capacity) ||
-    plateCapacity(selectedInput?.metadata?.plate_format) ||
-    plateCapacity(selectedInput?.metadata?.container_name) ||
-    plateCapacity(values.new_plate_format);
-  const usesExperimentSampleInput = [
-    "parent_task_outputs",
-    "experiment_samples",
-  ].includes(protocol?.execution?.inputSource || "");
+  const selectedExperimentInputs = samples.filter((sample) =>
+    inputSampleIds.includes(sample.id),
+  );
+  const requiresUniformInputType =
+    protocol?.execution?.inputTypePolicy === "uniform";
+  const selectedCanonicalInputType = selectedExperimentInputs[0]
+    ? normalizeSampleType(selectedExperimentInputs[0].type)
+    : undefined;
+  const activeInputTypes = usesExperimentSampleInput
+    ? inputMode === "existing"
+      ? selectedExperimentInputs.map((sample) =>
+          normalizeSampleType(sample.type),
+        )
+      : externalSampleType
+        ? [normalizeSampleType(externalSampleType)]
+        : []
+    : selectedInputType
+      ? [selectedInputType]
+      : [];
+  const selectedPlateCapacities = selectedExperimentInputs
+    .filter((sample) => normalizeSampleType(sample.type) === "PLATE")
+    .map(
+      (sample) =>
+        plateCapacity(sample.metadata?.plate_capacity) ||
+        plateCapacity(sample.metadata?.plate_format) ||
+        plateCapacity(sample.metadata?.container_name),
+    )
+    .filter((capacity) => capacity > 0);
+  const selectedPlateCapacity = usesExperimentSampleInput
+    ? inputMode === "external"
+      ? plateCapacity(externalPlateFormat)
+      : selectedPlateCapacities.length
+        ? Math.min(...selectedPlateCapacities)
+        : 0
+    : plateCapacity(selectedInput?.metadata?.plate_capacity) ||
+      plateCapacity(selectedInput?.metadata?.plate_format) ||
+      plateCapacity(selectedInput?.metadata?.container_name) ||
+      plateCapacity(values.new_plate_format);
+  const usesConditionAllocation =
+    protocol?.execution?.outputMode === "per_input_conditions";
+  const mapsConditionsToPlate =
+    protocol?.execution?.conditionAllocation?.plateMapping === true;
+  const conditionPlateCapacity = mapsConditionsToPlate
+    ? plateCapacity(values.plate_format)
+    : 0;
   const eligibleInputSamples = samples.filter((sample) => {
     if (!usesExperimentSampleInput) return false;
     if (sample.consumed) return false;
@@ -637,6 +688,19 @@ function TaskDrawer({
       .length;
   const toggleInputSample = (sampleId: string, selected: boolean) => {
     setInputMode("existing");
+    const sample = samples.find((item) => item.id === sampleId);
+    if (
+      selected &&
+      requiresUniformInputType &&
+      selectedCanonicalInputType &&
+      sample &&
+      normalizeSampleType(sample.type) !== selectedCanonicalInputType
+    ) {
+      setError(
+        `同一条 Record 的输入 Sample 必须属于同一种类型；请先取消已选的 ${sampleTypeLabel(selectedCanonicalInputType)}。`,
+      );
+      return;
+    }
     setInputSampleIds((current) =>
       selected
         ? current.includes(sampleId)
@@ -647,6 +711,11 @@ function TaskDrawer({
     setError("");
   };
   const renderSampleOption = (sample: Store["samples"][number]) => {
+    const incompatibleType =
+      requiresUniformInputType &&
+      Boolean(selectedCanonicalInputType) &&
+      normalizeSampleType(sample.type) !== selectedCanonicalInputType &&
+      !inputSampleIds.includes(sample.id);
     const source = sampleSourceInfo(sample, task, tasks, records);
     const sourceText = source.sourceTask
       ? `来源：${source.sourceTask.title} · ${dayLabel(source.sourceTask.start)} ${formatTime(source.sourceTask.start)}`
@@ -654,10 +723,14 @@ function TaskDrawer({
         ? "外部登记 · 无来源 Task"
         : "来源 Task 不可用";
     return (
-      <label className="sample-source-option" key={sample.id}>
+      <label
+        className={`sample-source-option${incompatibleType ? " incompatible" : ""}`}
+        key={sample.id}
+      >
         <input
           type="checkbox"
           checked={inputSampleIds.includes(sample.id)}
+          disabled={incompatibleType}
           onChange={(event) =>
             toggleInputSample(sample.id, event.target.checked)
           }
@@ -679,6 +752,9 @@ function TaskDrawer({
             {sample.metadata?.treatment_duration
               ? ` · ${String(sample.metadata.treatment_duration)}`
               : ""}
+            {incompatibleType
+              ? ` · 已选择 ${sampleTypeLabel(selectedCanonicalInputType || "")}，不可混选`
+              : ""}
           </small>
         </span>
       </label>
@@ -690,8 +766,13 @@ function TaskDrawer({
     setInputSampleIds([]);
     setInputMode("existing");
     setExternalSampleType(item.execution?.inputTypes?.[0] || "");
+    setExternalPlateFormat("");
     setExternalSampleCount(1);
     setExternalSamples([{ displayName: "", conditions: "" }]);
+    setConditionGroups([
+      { condition: "", dose: "", duration: "", sampleCount: 1 },
+    ]);
+    setPlateGroups([{ factor: "", duration: "", wellCount: 1 }]);
     const inputTypes = (item.execution?.inputTypes || []).map(
       normalizeSampleType,
     );
@@ -742,8 +823,18 @@ function TaskDrawer({
     )
       return setError("请填写所有迁入 Sample 的类型和 Label。");
     if (
+      usesExperimentSampleInput &&
+      inputMode === "external" &&
+      normalizeSampleType(externalSampleType) === "PLATE" &&
+      !plateCapacity(externalPlateFormat)
+    )
+      return setError("请填写迁入孔板的规格。");
+    if (
       protocol.fields?.some(
-        (field) => field.required && !values[field.key]?.trim(),
+        (field) =>
+          field.required &&
+          field.kind !== "condition_groups" &&
+          !values[field.key]?.trim(),
       )
     )
       return setError("请填写所有必填字段。");
@@ -756,7 +847,7 @@ function TaskDrawer({
     }
     if (
       protocol.execution?.eventType === "treatment" &&
-      selectedInputType === "PLATE"
+      activeInputTypes.includes("PLATE")
     ) {
       const used = plateGroups.reduce(
         (total, group) => total + group.wellCount,
@@ -787,12 +878,57 @@ function TaskDrawer({
           `已分配 ${used} 孔，超过 ${selectedPlateCapacity} 孔板容量。`,
         );
     }
+    if (
+      protocol.execution?.eventType === "treatment" &&
+      activeInputTypes.some((type) =>
+        ["CELL", "DISH", "WELL"].includes(type),
+      ) &&
+      !values.treatment_type?.trim()
+    )
+      return setError("请填写 Cell / 培养皿 / 孔的刺激类型。");
+    if (usesConditionAllocation) {
+      if (conditionGroups.length === 0)
+        return setError("请增加至少一个实验条件组。");
+      const invalidGroup = conditionGroups.findIndex(
+        (group) =>
+          !group.condition.trim() ||
+          !Number.isInteger(group.sampleCount) ||
+          group.sampleCount < 1,
+      );
+      if (invalidGroup >= 0)
+        return setError(
+          `第 ${invalidGroup + 1} 组需要填写实验条件和有效的 Sample 数量。`,
+        );
+      const total = conditionGroups.reduce(
+        (sum, group) => sum + group.sampleCount,
+        0,
+      );
+      if (mapsConditionsToPlate && !conditionPlateCapacity)
+        return setError("请选择孔板规格。");
+      if (mapsConditionsToPlate && total > conditionPlateCapacity)
+        return setError(
+          `每个输入将分配 ${total} 个位置，超过 ${conditionPlateCapacity} 孔板容量。`,
+        );
+      if (!mapsConditionsToPlate && total > 384)
+        return setError("每个输入最多产生 384 个按条件分配的 Sample。");
+    }
     try {
-      const submittedValues =
+      let submittedValues = values;
+      if (
         protocol.execution?.eventType === "treatment" &&
-        selectedInputType === "PLATE"
-          ? { ...values, treatment_groups: JSON.stringify(plateGroups) }
-          : values;
+        activeInputTypes.includes("PLATE")
+      ) {
+        submittedValues = {
+          ...submittedValues,
+          treatment_groups: JSON.stringify(plateGroups),
+        };
+      }
+      if (usesConditionAllocation) {
+        submittedValues = {
+          ...submittedValues,
+          condition_groups: JSON.stringify(conditionGroups),
+        };
+      }
       await startTaskRecord(
         task.id,
         protocol.id,
@@ -807,9 +943,17 @@ function TaskDrawer({
           ? externalSamples.map((sample): ExternalSampleDraft => ({
               sampleType: externalSampleType,
               displayName: sample.displayName.trim(),
-              metadata: sample.conditions.trim()
-                ? { existing_conditions: sample.conditions.trim() }
-                : {},
+              metadata: {
+                ...(sample.conditions.trim()
+                  ? { existing_conditions: sample.conditions.trim() }
+                  : {}),
+                ...(normalizeSampleType(externalSampleType) === "PLATE"
+                  ? {
+                      plate_format: externalPlateFormat,
+                      plate_capacity: plateCapacity(externalPlateFormat),
+                    }
+                  : {}),
+              },
             }))
           : [],
       );
@@ -1043,6 +1187,32 @@ function TaskDrawer({
                                     )}
                                   </select>
                                 </label>
+                                {normalizeSampleType(externalSampleType) ===
+                                  "PLATE" && (
+                                  <label className="task-form">
+                                    孔板规格
+                                    <select
+                                      value={externalPlateFormat}
+                                      onChange={(event) =>
+                                        setExternalPlateFormat(
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      <option value="">请选择</option>
+                                      {[
+                                        "6孔板",
+                                        "12孔板",
+                                        "24孔板",
+                                        "48孔板",
+                                        "96孔板",
+                                        "384孔板",
+                                      ].map((format) => (
+                                        <option key={format}>{format}</option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                )}
                                 <label className="task-form">
                                   数量
                                   <input
@@ -1132,10 +1302,9 @@ function TaskDrawer({
                         values[field.visibleWhen.key] ===
                           field.visibleWhen.value) &&
                       (!field.visibleForInputTypes ||
-                        (!!selectedInputType &&
-                          field.visibleForInputTypes.includes(
-                            selectedInputType,
-                          )));
+                        activeInputTypes.some((type) =>
+                          field.visibleForInputTypes?.includes(type),
+                        ));
                     if (!visible) return null;
                     if (field.kind === "plate_layout")
                       return (
@@ -1146,6 +1315,21 @@ function TaskDrawer({
                             groups={plateGroups}
                             onChange={(groups) => {
                               setPlateGroups(groups);
+                              setError("");
+                            }}
+                          />
+                        </div>
+                      );
+                    if (field.kind === "condition_groups")
+                      return (
+                        <div className="task-form" key={field.key}>
+                          <span>{field.label}</span>
+                          <ConditionGroupEditor
+                            capacity={conditionPlateCapacity}
+                            plateMapping={mapsConditionsToPlate}
+                            groups={conditionGroups}
+                            onChange={(groups) => {
+                              setConditionGroups(groups);
                               setError("");
                             }}
                           />
@@ -1313,6 +1497,104 @@ function PlateLayoutEditor({
       {capacity > 0 && used > capacity && (
         <p className="form-error">分组孔数不能超过孔板容量。</p>
       )}
+    </div>
+  );
+}
+
+function ConditionGroupEditor({
+  capacity,
+  plateMapping,
+  groups,
+  onChange,
+}: {
+  capacity: number;
+  plateMapping: boolean;
+  groups: SampleConditionGroup[];
+  onChange: (groups: SampleConditionGroup[]) => void;
+}) {
+  const used = groups.reduce((total, group) => total + group.sampleCount, 0);
+  const update = (index: number, patch: Partial<SampleConditionGroup>) =>
+    onChange(
+      groups.map((group, groupIndex) =>
+        groupIndex === index ? { ...group, ...patch } : group,
+      ),
+    );
+  return (
+    <div className="condition-layout">
+      <div
+        className={`plate-capacity ${plateMapping && capacity > 0 && used > capacity ? "over" : ""}`}
+      >
+        <b>{plateMapping ? `${capacity || "?"} 孔板` : "不映射孔板"}</b>
+        <span>
+          每个输入产生 {used} 个 Sample
+          {plateMapping ? ` · 已分配 ${used} / ${capacity || "?"} 孔` : ""}
+        </span>
+      </div>
+      <div className="condition-group condition-group-head" aria-hidden="true">
+        <span />
+        <b>实验条件（必填）</b>
+        <b>浓度（可选）</b>
+        <b>处理时间（可选）</b>
+        <b>数量</b>
+        <span />
+      </div>
+      {groups.map((group, index) => (
+        <div className="condition-group" key={index}>
+          <span>{index + 1}</span>
+          <input
+            aria-label={`第 ${index + 1} 组实验条件`}
+            placeholder="例如 Control 或 TNF-α"
+            value={group.condition}
+            onChange={(event) =>
+              update(index, { condition: event.target.value })
+            }
+          />
+          <input
+            aria-label={`第 ${index + 1} 组浓度`}
+            placeholder="例如 10 ng/mL"
+            value={group.dose}
+            onChange={(event) => update(index, { dose: event.target.value })}
+          />
+          <input
+            aria-label={`第 ${index + 1} 组处理时间`}
+            placeholder="例如 24 h"
+            value={group.duration}
+            onChange={(event) =>
+              update(index, { duration: event.target.value })
+            }
+          />
+          <input
+            aria-label={`第 ${index + 1} 组 Sample 数量`}
+            type="number"
+            min="1"
+            max={plateMapping ? capacity || 384 : 384}
+            value={group.sampleCount}
+            onChange={(event) =>
+              update(index, { sampleCount: Number(event.target.value) })
+            }
+          />
+          <button
+            type="button"
+            aria-label={`删除第 ${index + 1} 组`}
+            disabled={groups.length === 1}
+            onClick={() => onChange(groups.filter((_, item) => item !== index))}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="add-plate-group"
+        onClick={() =>
+          onChange([
+            ...groups,
+            { condition: "", dose: "", duration: "", sampleCount: 1 },
+          ])
+        }
+      >
+        ＋ 增加条件组
+      </button>
     </div>
   );
 }

@@ -38,8 +38,8 @@ pub fn builtins() -> [BuiltinProtocol; 11] {
             name: "细胞加刺激",
             category: "细胞培养",
             accent: "#167c80",
-            schema_version: 3,
-            schema: r#"{"schemaVersion":3,"blocks":["选择孔板/培养皿/孔","设置孔板刺激分组","核对孔数并生成样本"],"fields":[{"key":"input_sample","label":"输入样本","kind":"samples"},{"key":"new_object_type","label":"新对象类型（未选择输入时）","kind":"select","options":["孔板","培养皿","孔"]},{"key":"new_object_name","label":"新对象名称","kind":"text"},{"key":"new_plate_format","label":"新孔板规格","kind":"select","options":["6孔板","12孔板","24孔板","48孔板","96孔板","384孔板"],"visibleWhen":{"key":"new_object_type","value":"孔板"}},{"key":"treatment_groups","label":"孔板刺激分组","kind":"plate_layout","visibleForInputTypes":["PLATE"]},{"key":"treatment_type","label":"刺激类型","kind":"text","visibleForInputTypes":["DISH","WELL"]}],"template":"日期：{{date}}\n\n孔板刺激布局：\n{{plate_layout_summary}}\n\n单对象刺激：{{treatment_type}}\n\n1. 核对待处理对象和孔板规格。\n2. 按分组完成刺激并记录各孔条件。","execution":{"eventType":"treatment","inputTypes":["PLATE","DISH","WELL"],"outputMode":"plate_wells"}}"#,
+            schema_version: 5,
+            schema: r#"{"schemaVersion":5,"blocks":["选择同一类型的一个或多个 Sample","填写该类型对应的刺激条件","核对并生成 Record"],"fields":[{"key":"treatment_groups","label":"孔板刺激分组","kind":"plate_layout","visibleForInputTypes":["PLATE"]},{"key":"treatment_type","label":"刺激类型","kind":"text","visibleForInputTypes":["CELL","DISH","WELL"]}],"template":"日期：{{date}}\n输入 Sample：{{input_sample_summary}}\n\n刺激设置：\n{{treatment_summary}}\n\n实验过程：\n1. 核对输入 Sample 和刺激条件。\n2. 按上述设置完成刺激。\n3. 记录实际操作、偏差和观察结果。","execution":{"eventType":"treatment","inputSource":"experiment_samples","inputCardinality":"many","inputTypePolicy":"uniform","inputTypes":["CELL","PLATE","DISH","WELL"],"outputMode":"plate_wells","consumptionPolicy":"non_destructive"}}"#,
         },
         BuiltinProtocol {
             id: "pro-rna",

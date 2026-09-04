@@ -9,6 +9,9 @@ import {
 import "./protocol-editor.css";
 
 type OutputBehavior = UserProtocolDraft["outputBehavior"];
+type MultipleSampleMode = NonNullable<
+  UserProtocolDraft["multipleSampleMode"]
+>;
 
 const canonicalType = (value: string) =>
   value
@@ -41,6 +44,9 @@ export function ProtocolCreationWizard({
   const [outputBehavior, setOutputBehavior] =
     useState<OutputBehavior>("derived_one");
   const [outputType, setOutputType] = useState("CDNA");
+  const [multipleSampleMode, setMultipleSampleMode] =
+    useState<MultipleSampleMode>("identical");
+  const [plateMapping, setPlateMapping] = useState(false);
   const [consumptionPolicy, setConsumptionPolicy] =
     useState<UserProtocolDraft["consumptionPolicy"]>("consume");
   const [template, setTemplate] = useState(
@@ -57,12 +63,17 @@ export function ProtocolCreationWizard({
     (item) => item.canonicalType === normalizedOutput,
   );
   const inputPreview = `${selectedInput?.displayName || normalizedInput || "INPUT"}-001`;
+  const outputTypePreview =
+    selectedOutput?.displayName || normalizedOutput || "OUTPUT";
   const outputPreview =
     outputBehavior === "measurement_only"
       ? "Measurement only"
       : outputBehavior === "same_sample"
         ? inputPreview
-        : `${selectedOutput?.displayName || normalizedOutput || "OUTPUT"}-001${outputBehavior === "derived_multiple" ? " …" : ""}`;
+        : `${outputTypePreview}-001${outputBehavior === "derived_multiple" ? " …" : ""}`;
+  const usesConditionGroups =
+    outputBehavior === "derived_multiple" &&
+    multipleSampleMode === "condition_groups";
 
   const validateStep = () => {
     if (step === 1 && (!name.trim() || !description.trim()))
@@ -106,6 +117,9 @@ export function ProtocolCreationWizard({
         inputType: normalizedInput,
         inputTypeDisplayName: selectedInput?.displayName || inputType.trim(),
         outputBehavior,
+        multipleSampleMode:
+          outputBehavior === "derived_multiple" ? multipleSampleMode : undefined,
+        plateMapping: usesConditionGroups ? plateMapping : undefined,
         outputType:
           outputBehavior === "derived_one" ||
           outputBehavior === "derived_multiple"
@@ -236,6 +250,75 @@ export function ProtocolCreationWizard({
                   )}
                 </label>
               )}
+              {outputBehavior === "derived_multiple" && (
+                <fieldset className="multiple-mode-fieldset">
+                  <legend>多个 Sample 的关系</legend>
+                  <label
+                    className={`flow-choice ${multipleSampleMode === "identical" ? "selected" : ""}`}
+                  >
+                    <input
+                      type="radio"
+                      checked={multipleSampleMode === "identical"}
+                      onChange={() => {
+                        setMultipleSampleMode("identical");
+                        setTemplate((current) =>
+                          current.replace(
+                            "\n\n实验条件分配：\n{{condition_groups_summary}}",
+                            "",
+                          ),
+                        );
+                      }}
+                    />
+                    <span>
+                      <b>相同条件的多个 Sample</b>
+                      <small>
+                        每个输入只填写输出数量；所有输出继承相同条件。适合传代、分装和技术重复。
+                      </small>
+                    </span>
+                  </label>
+                  <label
+                    className={`flow-choice ${multipleSampleMode === "condition_groups" ? "selected" : ""}`}
+                  >
+                    <input
+                      type="radio"
+                      checked={multipleSampleMode === "condition_groups"}
+                      onChange={() => {
+                        setMultipleSampleMode("condition_groups");
+                        setTemplate((current) =>
+                          current.includes("{{condition_groups_summary}}")
+                            ? current
+                            : `${current.trimEnd()}\n\n实验条件分配：\n{{condition_groups_summary}}`,
+                        );
+                      }}
+                    />
+                    <span>
+                      <b>按实验条件分配</b>
+                      <small>
+                        创建 Record 时添加多个条件组，并分别填写条件、浓度、时间和数量。
+                      </small>
+                    </span>
+                  </label>
+                  {usesConditionGroups && (
+                    <label
+                      className={`plate-mapping-choice ${plateMapping ? "selected" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={plateMapping}
+                        onChange={(event) =>
+                          setPlateMapping(event.target.checked)
+                        }
+                      />
+                      <span>
+                        <b>同时记录孔板位置（可选）</b>
+                        <small>
+                          系统按 A01、A02… 自动分配位置；只增加位置记录，不改变输出 Sample 类型。
+                        </small>
+                      </span>
+                    </label>
+                  )}
+                </fieldset>
+              )}
               <fieldset>
                 <legend>输入 Sample</legend>
                 <label className="radio-row">
@@ -258,12 +341,63 @@ export function ProtocolCreationWizard({
             </div>
             <aside className="flow-preview">
               <p>Sample Flow Preview</p>
-              <strong>{inputPreview}</strong>
-              <i>│</i>
-              <span>│ {name.trim() || "Protocol"}</span>
-              <i>↓</i>
-              <strong>{outputPreview}</strong>
-              <small>派生 Sample 默认继承父 Sample metadata。</small>
+              <div className="flow-node input-node">
+                <small>输入</small>
+                <strong>{inputPreview}</strong>
+              </div>
+              <div className="flow-arrow">
+                <i>↓</i>
+                <span>{name.trim() || "Protocol"}</span>
+                <i>↓</i>
+              </div>
+              {outputBehavior === "derived_multiple" ? (
+                multipleSampleMode === "identical" ? (
+                  <div className="flow-node output-node">
+                    <small>每个输入 → 多个相同条件输出</small>
+                    <div className="sample-chip-row">
+                      {[1, 2, 3].map((index) => (
+                        <b key={index}>{`${outputTypePreview}-${String(index).padStart(3, "0")}`}</b>
+                      ))}
+                    </div>
+                    <em>同一套 metadata · Record 时只填写数量</em>
+                  </div>
+                ) : (
+                  <div className="flow-node output-node condition-preview">
+                    <small>每个输入 → 按条件分别生成</small>
+                    <div>
+                      <b>条件 A</b>
+                      <span>
+                        {outputTypePreview} × N
+                        {plateMapping ? " · A01, A02…" : ""}
+                      </span>
+                    </div>
+                    <div>
+                      <b>条件 B</b>
+                      <span>
+                        {outputTypePreview} × N
+                        {plateMapping ? " · B01, B02…" : ""}
+                      </span>
+                    </div>
+                    <em>
+                      {plateMapping
+                        ? "孔位是附加位置，不改变 Sample 类型"
+                        : "Record 时填写条件、浓度、时间和数量"}
+                    </em>
+                  </div>
+                )
+              ) : (
+                <div className="flow-node output-node">
+                  <small>输出</small>
+                  <strong>{outputPreview}</strong>
+                  <em>
+                    {outputBehavior === "same_sample"
+                      ? "仍指向原 Sample"
+                      : outputBehavior === "measurement_only"
+                        ? "保存检测记录，不创建 Sample"
+                        : "每个输入产生一个新 Sample"}
+                  </em>
+                </div>
+              )}
             </aside>
           </div>
         )}
@@ -280,6 +414,7 @@ export function ProtocolCreationWizard({
               <small>
                 可用：{"{{date}}"}、{"{{input_sample_summary}}"}、
                 {"{{output_sample_summary}}"}
+                {usesConditionGroups ? "、{{condition_groups_summary}}" : ""}
               </small>
             </label>
             <aside className="record-template-preview">
@@ -291,6 +426,10 @@ export function ProtocolCreationWizard({
                   .replaceAll(
                     "{{output_sample_summary}}",
                     outputBehavior === "measurement_only" ? "" : outputPreview,
+                  )
+                  .replaceAll(
+                    "{{condition_groups_summary}}",
+                    usesConditionGroups ? "1. Control × 3\n2. Treatment × 3" : "",
                   )}
               </pre>
             </aside>

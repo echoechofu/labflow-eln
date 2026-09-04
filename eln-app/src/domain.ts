@@ -22,7 +22,13 @@ export interface Task {
 export interface ProtocolField {
   key: string;
   label: string;
-  kind: "text" | "select" | "number" | "samples" | "plate_layout";
+  kind:
+    | "text"
+    | "select"
+    | "number"
+    | "samples"
+    | "plate_layout"
+    | "condition_groups";
   required?: boolean;
   options?: string[];
   visibleWhen?: { key: string; value: string };
@@ -35,18 +41,23 @@ export interface ProtocolExecution {
   inputTypes?: string[];
   inputSource?: "parent_task_outputs" | "experiment_samples";
   inputCardinality?: "one" | "many";
+  inputTypePolicy?: "uniform" | "mixed";
   outputType?: string;
   outputMode:
     | "one"
     | "count"
     | "per_input"
     | "per_input_count"
+    | "per_input_conditions"
     | "same_sample"
     | "plate_or_dish"
     | "plate_wells"
     | "none";
   resultTypes?: string[];
   consumptionPolicy?: "consume" | "non_destructive" | "aliquot";
+  conditionAllocation?: {
+    plateMapping?: boolean;
+  };
 }
 export interface TerminalAssayDefinition {
   itemLabel: string;

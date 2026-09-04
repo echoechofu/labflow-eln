@@ -339,6 +339,8 @@ export interface UserProtocolDraft {
   inputTypeDisplayName: string;
   outputBehavior:
     "same_sample" | "derived_one" | "derived_multiple" | "measurement_only";
+  multipleSampleMode?: "identical" | "condition_groups";
+  plateMapping?: boolean;
   outputType?: string;
   outputTypeDisplayName?: string;
   consumptionPolicy: "retain" | "consume";

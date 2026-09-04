@@ -40,5 +40,8 @@ ditto "$app_path" "$stage_dir/dmg/LabFlow.app"
 ln -s /Applications "$stage_dir/dmg/Applications"
 hdiutil create -volname LabFlow -srcfolder "$stage_dir/dmg" -ov -format UDZO "$output_dir/$dmg_name" >/dev/null
 
+(cd "$output_dir" && shasum -a 256 "$archive_name" "$dmg_name" > SHA256SUMS.txt)
+
 echo "Created: $output_dir/$archive_name"
 echo "Created: $output_dir/$dmg_name"
+echo "Created: $output_dir/SHA256SUMS.txt"

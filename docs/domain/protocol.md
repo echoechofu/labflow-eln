@@ -5,18 +5,21 @@
 Protocol 由 `protocols` 与 `protocol_versions` 表表达。Protocol 和 version 都区分 `builtin` / `user` 来源；活跃版本包含 JSON schema，当前使用的字段包括：
 
 - `blocks`：UI 的步骤概览；
-- `fields`：文本、数字、选择、Sample 选择和孔板布局字段，以及必填/可见性信息；
+- `fields`：文本、数字、选择、Sample 选择、孔板布局和条件分配字段，以及必填/可见性信息；
 - `template` 或 `templateSelector` + `templateVariants`：Record 正文模板；
 - `execution`：事件类型、允许的输入类型/来源/基数、输出类型与模式、Sample usage policy、Result 类型。
 
 内置 catalog 当前有 11 个 Protocol：细胞复苏、细胞传代、细胞铺板、细胞加刺激、RNA Extraction — Trizol、Reverse Transcription — PrimeScript、SYBR Green qPCR、Western Blot、培养上清收集、ELISA — 细胞因子、CCK-8 细胞增殖/毒性实验。ELISA 与 CCK-8 的实验正文来自仓库根目录的 `组内protocol整理_Ver1.0.doc`。
 
-用户可通过三步向导创建 Protocol v1：基本信息、Sample Flow、Record Template。当前用户定义范围是单一输入类型和以下四种输出语义：
+用户可通过三步向导创建 Protocol v1：基本信息、Sample Flow、Record Template。当前用户定义范围是单一输入类型和以下输出语义：
 
 - 原 Sample 继续（`same_sample`）；
 - 每个输入派生一个新 Sample（`per_input`）；
 - 每个输入按 Record 启动时填写的数量派生多个 Sample（`per_input_count`）；
+- 每个输入按条件组派生多个 Sample（`per_input_conditions`），可选将输出顺序映射到孔板位置；
 - 仅检测、不产生 Sample（`none`）。
+
+条件分配与 Sample 类型相互独立。创建者可将输出定义为任何已注册或同时注册的类型（例如 `CELL`、`PLATE`、`DISH`）；启用孔板映射时，位置写入输出 Sample 的 `plate_position` metadata，并不会把 Sample 类型强制改成 `WELL`。同一套条件组会分别应用到每个输入 Sample。
 
 输入 usage 可声明为保留（`non_destructive`）或转化/消耗（`consumed`）；系统拒绝“原 Sample 继续 + consumed”的矛盾组合。用户也可注册新的 Sample 类型。持久化类型始终为大写 canonical value，展示名称可保留科学写法。
 
@@ -26,7 +29,7 @@ qPCR、ELISA、CCK-8 的 schema 还包含当前已实现的 `terminalAssay` 描�
 
 ## 当前专属逻辑与通用边界
 
-`sample_flow_v1` 已为用户 Protocol 提供受限的声明式执行：同一 Experiment 的 Sample 选择或 external Sample 登记、输入类型/基数、四种输出行为、usage policy 和父 metadata 继承。它不允许用户提交 JavaScript、Rust 或 SQL。历史 snapshot 中的 `parent_task_outputs` 继续兼容读取，但不再把 Task relation 当作材料合法性的硬约束；当前新建 Protocol 使用 `experiment_samples`。
+`sample_flow_v1` 已为用户 Protocol 提供受限的声明式执行：同一 Experiment 的 Sample 选择或 external Sample 登记、输入类型/基数、普通与条件分配输出行为、usage policy 和父 metadata 继承。它不允许用户提交 JavaScript、Rust 或 SQL。历史 snapshot 中的 `parent_task_outputs` 继续兼容读取，但不再把 Task relation 当作材料合法性的硬约束；当前新建 Protocol 使用 `experiment_samples`。
 
 这仍不是覆盖所有实验能力的完整 DSL。Rust 执行器继续保留内置 Protocol 的专属事件分支，例如：
 
@@ -35,7 +38,7 @@ qPCR、ELISA、CCK-8 的 schema 还包含当前已实现的 `terminalAssay` 描�
 - `one`、`count`、`plate_or_dish`、`plate_wells` 等内置输出模式；
 - `cDNA` 的显示后缀与 Sample 类型大写规范化。
 
-因此，当前能力是“受限 Sample Flow Protocol 创建器”，不是任意 Protocol 上传器。孔板布局、终末检测、专属计算和复杂字段仍需已实现的内置 schema/执行器支持。
+因此，当前能力是“受限 Sample Flow Protocol 创建器”，不是任意 Protocol 上传器。用户 Protocol 已支持按条件生成多个 Sample 和可选的顺序孔位映射；可视化手动选孔、终末检测、专属计算和其他复杂字段仍需已实现的内置 schema/执行器支持。
 
 ## Protocol 与历史 Record
 
@@ -48,5 +51,5 @@ Protocol 的活跃版本可在启动时随内置 catalog 升级；新的 schema 
 ## Future design constraints（尚未实现）
 
 - Word/PDF/结构化文件上传导入尚未实现。
-- 用户为自定义 Protocol 增加任意动态 Record 字段、孔板/终末检测能力尚未实现。
+- 用户为自定义 Protocol 增加任意动态 Record 字段、图形化手动选孔和终末检测能力尚未实现。
 - 若扩展通用 schema/导入器，应保持既有 Record snapshot、用户版本和 lineage 数据可读。

@@ -83,6 +83,8 @@ fn validate_protocol_template(template: &str, spec: &Value) -> Result<(), Protoc
         "input_sample_summary".to_string(),
         "output_sample_summary".to_string(),
         "plate_layout_summary".to_string(),
+        "treatment_summary".to_string(),
+        "condition_groups_summary".to_string(),
     ];
     for field in spec
         .get("fields")
@@ -309,9 +311,35 @@ pub fn save_user_protocol(
         .unwrap_or(&input_type)
         .trim();
     let output_behavior = require_string(&request, "outputBehavior")?;
+    let multiple_sample_mode = request
+        .get("multipleSampleMode")
+        .and_then(Value::as_str)
+        .unwrap_or("identical");
+    if !matches!(multiple_sample_mode, "identical" | "condition_groups") {
+        return Err(ProtocolServiceError::Validation(
+            "Unsupported multiple Sample mode".into(),
+        ));
+    }
+    if output_behavior != "derived_multiple" && multiple_sample_mode != "identical" {
+        return Err(ProtocolServiceError::Validation(
+            "Condition allocation requires multiple output Samples".into(),
+        ));
+    }
+    let plate_mapping = request
+        .get("plateMapping")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if plate_mapping
+        && !(output_behavior == "derived_multiple" && multiple_sample_mode == "condition_groups")
+    {
+        return Err(ProtocolServiceError::Validation(
+            "Plate mapping requires condition-allocated output Samples".into(),
+        ));
+    }
     let output_mode = match output_behavior.as_str() {
         "same_sample" => "same_sample",
         "derived_one" => "per_input",
+        "derived_multiple" if multiple_sample_mode == "condition_groups" => "per_input_conditions",
         "derived_multiple" => "per_input_count",
         "measurement_only" => "none",
         _ => {
@@ -334,7 +362,10 @@ pub fn save_user_protocol(
             "A consumed Sample cannot continue as the output".into(),
         ));
     }
-    let output_type = if matches!(output_mode, "per_input" | "per_input_count") {
+    let output_type = if matches!(
+        output_mode,
+        "per_input" | "per_input_count" | "per_input_conditions"
+    ) {
         Some(canonical_sample_type(&require_string(
             &request,
             "outputType",
@@ -344,10 +375,18 @@ pub fn save_user_protocol(
     };
     let template = require_string(&request, "template")?;
     let created_at = require_nonempty_string(&request, "createdAt")?;
-    let fields = if output_mode == "per_input_count" {
-        json!([{"key":"output_count","label":"每个输入产生数量","kind":"number","required":true,"defaultValue":"2"}])
-    } else {
-        json!([])
+    let fields = match output_mode {
+        "per_input_count" => json!([
+            {"key":"output_count","label":"每个输入产生数量","kind":"number","required":true,"defaultValue":"2"}
+        ]),
+        "per_input_conditions" if plate_mapping => json!([
+            {"key":"plate_format","label":"孔板规格","kind":"select","required":true,"options":["6孔板","12孔板","24孔板","48孔板","96孔板","384孔板"]},
+            {"key":"condition_groups","label":"实验条件分配","kind":"condition_groups","required":true}
+        ]),
+        "per_input_conditions" => json!([
+            {"key":"condition_groups","label":"实验条件分配","kind":"condition_groups","required":true}
+        ]),
+        _ => json!([]),
     };
     let mut execution = json!({
         "engine":"sample_flow_v1",
@@ -362,10 +401,13 @@ pub fn save_user_protocol(
     if let Some(output_type) = &output_type {
         execution["outputType"] = json!(output_type);
     }
+    if output_mode == "per_input_conditions" {
+        execution["conditionAllocation"] = json!({"plateMapping":plate_mapping});
+    }
     let spec = json!({
         "schemaVersion":1,
         "userDefined":true,
-        "blocks":["选择输入 Sample", "按模板记录实验过程", match output_mode { "same_sample" => "原 Sample 继续", "per_input" => "每个输入产生一个新 Sample", "per_input_count" => "每个输入产生多个新 Sample", _ => "仅记录检测，不产生 Sample" }],
+        "blocks":["选择输入 Sample", "按模板记录实验过程", match output_mode { "same_sample" => "原 Sample 继续", "per_input" => "每个输入产生一个新 Sample", "per_input_count" => "每个输入产生多个相同条件的 Sample", "per_input_conditions" => "按实验条件产生多个 Sample", _ => "仅记录检测，不产生 Sample" }],
         "fields":fields,
         "template":template,
         "execution":execution
@@ -673,6 +715,33 @@ mod tests {
         let views = list_protocols(&connection).unwrap();
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].id, "p1");
+    }
+
+    #[test]
+    fn condition_allocated_protocol_keeps_output_type_independent_from_plate_mapping() {
+        let mut connection = fresh();
+        save_user_protocol(
+            &mut connection,
+            json!({
+                "id":"p-conditions","name":"Condition split","description":"d",
+                "inputType":"CELL","inputTypeDisplayName":"Cell",
+                "outputBehavior":"derived_multiple",
+                "multipleSampleMode":"condition_groups","plateMapping":true,
+                "outputType":"DISH","outputTypeDisplayName":"Dish",
+                "consumptionPolicy":"retain",
+                "template":"{{condition_groups_summary}}\n{{output_sample_summary}}",
+                "createdAt":"2026-08-26T09:00:00Z"
+            }),
+        )
+        .unwrap();
+        let view = get_protocol(&connection, "p-conditions").unwrap().unwrap();
+        assert_eq!(view.spec["execution"]["outputMode"], "per_input_conditions");
+        assert_eq!(view.spec["execution"]["outputType"], "DISH");
+        assert_eq!(
+            view.spec["execution"]["conditionAllocation"]["plateMapping"],
+            true
+        );
+        assert_eq!(view.spec["fields"][1]["kind"], "condition_groups");
     }
 
     #[test]

@@ -192,6 +192,51 @@ div.task-form {
 .modal:has(.plate-layout) {
   width: min(760px, calc(100vw - 40px));
 }
+.condition-layout {
+  display: grid;
+  gap: 9px;
+  margin-top: 6px;
+}
+.condition-group {
+  display: grid;
+  grid-template-columns: 24px minmax(130px, 1fr) minmax(100px, 0.75fr) minmax(100px, 0.75fr) 70px 30px;
+  gap: 7px;
+  align-items: center;
+}
+.condition-group > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #efedff;
+  color: #5c4bd2;
+  font-size: 11px;
+}
+.condition-group-head b {
+  color: #858194;
+  font-size: 10px;
+  font-weight: 600;
+}
+.condition-group-head > span:first-child {
+  background: transparent;
+}
+.condition-group input {
+  min-width: 0;
+}
+.condition-group button {
+  border: 0;
+  background: #f2f1f6;
+  border-radius: 6px;
+  height: 34px;
+  color: #777489;
+}
+.condition-group button:disabled {
+  opacity: 0.35;
+}
+.modal:has(.condition-layout) {
+  width: min(900px, calc(100vw - 40px));
+}
 .protocol-inputs {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -299,6 +344,10 @@ div.task-form {
 }
 .protocol-inputs .sample-source-option {
   align-items: flex-start;
+}
+.protocol-inputs .sample-source-option.incompatible {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 .sample-source-option > span {
   min-width: 0;

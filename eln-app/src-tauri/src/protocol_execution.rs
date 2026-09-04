@@ -122,6 +122,16 @@ fn resolve_experiment_inputs(
         }
         resolved.push((id.clone(), sample_type));
     }
+    if execution.get("inputTypePolicy").and_then(Value::as_str) == Some("uniform") {
+        if let Some((_, first_type)) = resolved.first() {
+            if resolved
+                .iter()
+                .any(|(_, sample_type)| sample_type != first_type)
+            {
+                return Err("All input Samples in one Record must use the same Sample type".into());
+            }
+        }
+    }
     Ok(resolved)
 }
 
@@ -436,65 +446,149 @@ pub fn execute_with_external(
         "passage" | "plating" if input_type != Some("CELL") => {
             return Err(format!("{event_type} requires a CELL input"))
         }
-        "treatment" if !matches!(input_type, Some("PLATE" | "DISH" | "WELL")) => {
-            return Err("Treatment requires a PLATE, DISH, or WELL input".into())
+        "treatment"
+            if inputs.iter().any(|(_, sample_type)| {
+                !matches!(sample_type.as_str(), "CELL" | "PLATE" | "DISH" | "WELL")
+            }) =>
+        {
+            return Err("Treatment requires CELL, PLATE, DISH, or WELL inputs".into())
         }
         _ => {}
     }
-    let plate_assignments = if event_type == "treatment" && input_type == Some("PLATE") {
-        let input_id = input.as_ref().map(|(id, _)| id).unwrap();
-        let metadata_json: String = tx
-            .query_row(
-                "SELECT metadata_json FROM samples WHERE id=?1",
-                [input_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        let metadata: Value = serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({}));
-        let capacity = crate::plate_layout::capacity_from_metadata(&metadata).ok_or(
-            "Plate capacity is missing; use a plate created with a supported plate format",
-        )?;
-        let assignments = if let Some(raw) = string_value(&values, "treatment_groups") {
-            crate::plate_layout::parse_and_assign(raw, capacity)?
-        } else {
-            // Preserve execution of historical Protocol snapshots that supplied
-            // explicit well positions before grouped plate layouts were added.
-            let factor = string_value(&values, "treatment_type")
-                .ok_or("Plate treatment requires treatment groups")?;
-            let wells = string_value(&values, "target_wells")
-                .ok_or("Plate treatment requires treatment groups")?
-                .split(',')
-                .map(str::trim)
-                .filter(|well| !well.is_empty())
-                .collect::<Vec<_>>();
-            if wells.len() > capacity {
-                return Err(format!(
-                    "Treatment requests {} wells, exceeding the {capacity}-well plate",
-                    wells.len()
-                ));
+    let mut plate_assignments = Vec::new();
+    if event_type == "treatment" {
+        for (input_id, sample_type) in &inputs {
+            if sample_type != "PLATE" {
+                continue;
             }
-            wells
-                .into_iter()
-                .map(|position| crate::plate_layout::WellAssignment {
-                    position: position.to_owned(),
-                    factor: factor.to_owned(),
-                    duration: string_value(&values, "treatment_duration")
-                        .unwrap_or("")
-                        .to_owned(),
-                    group_index: 0,
-                })
-                .collect()
+            let metadata_json: String = tx
+                .query_row(
+                    "SELECT metadata_json FROM samples WHERE id=?1",
+                    [input_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            let metadata: Value =
+                serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({}));
+            let capacity = crate::plate_layout::capacity_from_metadata(&metadata).ok_or(
+                "Plate capacity is missing; use a plate created with a supported plate format",
+            )?;
+            let assignments = if let Some(raw) = string_value(&values, "treatment_groups") {
+                crate::plate_layout::parse_and_assign(raw, capacity)?
+            } else {
+                // Preserve historical Protocol snapshots that supplied explicit
+                // positions before grouped plate layouts were added.
+                let factor = string_value(&values, "treatment_type")
+                    .ok_or("Plate treatment requires treatment groups")?;
+                let wells = string_value(&values, "target_wells")
+                    .ok_or("Plate treatment requires treatment groups")?
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|well| !well.is_empty())
+                    .collect::<Vec<_>>();
+                if wells.len() > capacity {
+                    return Err(format!(
+                        "Treatment requests {} wells, exceeding the {capacity}-well plate",
+                        wells.len()
+                    ));
+                }
+                wells
+                    .into_iter()
+                    .map(|position| crate::plate_layout::WellAssignment {
+                        position: position.to_owned(),
+                        factor: factor.to_owned(),
+                        duration: string_value(&values, "treatment_duration")
+                            .unwrap_or("")
+                            .to_owned(),
+                        group_index: 0,
+                    })
+                    .collect()
+            };
+            plate_assignments.push((input_id.clone(), assignments));
+        }
+        if inputs.iter().any(|(_, sample_type)| sample_type != "PLATE")
+            && string_value(&values, "treatment_type").is_none()
+        {
+            return Err("Cell, dish, or well treatment requires a treatment type".into());
+        }
+    }
+    let plate_summary = plate_assignments
+        .iter()
+        .map(|(input_id, assignments)| {
+            let summary = crate::plate_layout::summary(assignments);
+            if plate_assignments.len() == 1 {
+                Ok(summary)
+            } else {
+                let code: String = tx
+                    .query_row(
+                        "SELECT sample_code FROM samples WHERE id=?1",
+                        [input_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())?;
+                Ok(format!("{code}\n{summary}"))
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?
+        .join("\n\n");
+    rendered = rendered.replace("{{plate_layout_summary}}", &plate_summary);
+    if event_type == "treatment" {
+        let type_label = match input_type.unwrap_or("") {
+            "CELL" => "Cell",
+            "PLATE" => "孔板",
+            "DISH" => "培养皿",
+            "WELL" => "孔",
+            other => other,
         };
+        let treatment_summary = if input_type == Some("PLATE") {
+            let layout_label = if inputs.len() > 1 {
+                "每块孔板的刺激分组"
+            } else {
+                "刺激分组"
+            };
+            format!(
+                "处理对象：{type_label}（{} 个）\n{layout_label}：\n{plate_summary}",
+                inputs.len()
+            )
+        } else {
+            let treatment_type = string_value(&values, "treatment_type")
+                .ok_or("Cell, dish, or well treatment requires a treatment type")?;
+            format!(
+                "处理对象：{type_label}（{} 个）\n刺激类型：{treatment_type}",
+                inputs.len()
+            )
+        };
+        rendered = rendered.replace("{{treatment_summary}}", &treatment_summary);
+    }
+    let output_mode = execution
+        .get("outputMode")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let condition_assignments = if output_mode == "per_input_conditions" {
+        let raw = string_value(&values, "condition_groups")
+            .ok_or("Condition allocation requires condition groups")?;
+        let plate_mapping = execution
+            .get("conditionAllocation")
+            .and_then(|allocation| allocation.get("plateMapping"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let capacity = if plate_mapping {
+            Some(
+                string_value(&values, "plate_format")
+                    .and_then(crate::plate_layout::supported_capacity)
+                    .ok_or("Choose a supported plate format for condition allocation")?,
+            )
+        } else {
+            None
+        };
+        let assignments = crate::plate_layout::parse_condition_groups(raw, capacity)?;
         rendered = rendered.replace(
-            "{{plate_layout_summary}}",
-            &crate::plate_layout::summary(&assignments),
+            "{{condition_groups_summary}}",
+            &crate::plate_layout::condition_summary(&assignments),
         );
         Some(assignments)
     } else {
-        if event_type == "treatment" && string_value(&values, "treatment_type").is_none() {
-            return Err("Dish or well treatment requires a treatment type".into());
-        }
-        rendered = rendered.replace("{{plate_layout_summary}}", "");
+        rendered = rendered.replace("{{condition_groups_summary}}", "");
         None
     };
     let event_id = format!("event-{record_id}");
@@ -538,15 +632,13 @@ pub fn execute_with_external(
             .map_err(|error| error.to_string())?;
         }
     }
-    let output_mode = execution
-        .get("outputMode")
-        .and_then(Value::as_str)
-        .unwrap_or("none");
     if output_mode == "same_sample"
         && execution.get("consumptionPolicy").and_then(Value::as_str) == Some("consume")
     {
         return Err("A consumed Sample cannot continue as the Protocol output".into());
     }
+    let mut output_conditions = Vec::new();
+    let mut plate_output_assignments = Vec::new();
     let (output_type, output_labels, output_parents): (&str, Vec<String>, Vec<Option<String>>) =
         match output_mode {
             "one" => (
@@ -622,6 +714,39 @@ pub fn execute_with_external(
                 }
                 (output_type, labels, parents)
             }
+            "per_input_conditions" => {
+                let output_type = execution
+                    .get("outputType")
+                    .and_then(Value::as_str)
+                    .ok_or("outputType is required")?;
+                let assignments = condition_assignments
+                    .as_ref()
+                    .ok_or("Condition assignments were not prepared")?;
+                let mut labels = Vec::with_capacity(input_ids.len() * assignments.len());
+                let mut parents = Vec::with_capacity(labels.capacity());
+                for id in &input_ids {
+                    let parent_label: String = tx
+                        .query_row(
+                            "SELECT coalesce(display_name,sample_code) FROM samples WHERE id=?1",
+                            [id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|error| error.to_string())?;
+                    for assignment in assignments {
+                        let suffix = assignment
+                            .plate_position
+                            .as_deref()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| {
+                                format!("{} · {}", assignment.condition, assignment.replicate_index)
+                            });
+                        labels.push(format!("{parent_label} · {suffix}"));
+                        parents.push(Some(id.clone()));
+                        output_conditions.push(assignment.clone());
+                    }
+                }
+                (output_type, labels, parents)
+            }
             "plate_or_dish" => {
                 let kind =
                     string_value(&values, "container_type").ok_or("Container type is required")?;
@@ -647,20 +772,22 @@ pub fn execute_with_external(
                     vec![input.as_ref().map(|(id, _)| id.clone())],
                 )
             }
-            "plate_wells" if input_type == Some("PLATE") => (
-                "WELL",
-                plate_assignments
-                    .as_ref()
-                    .expect("plate treatment assignments were validated")
+            "plate_wells" => {
+                let output_count = plate_assignments
                     .iter()
-                    .map(|assignment| assignment.position.clone())
-                    .collect(),
-                vec![
-                    input.as_ref().map(|(id, _)| id.clone());
-                    plate_assignments.as_ref().map(Vec::len).unwrap_or(0)
-                ],
-            ),
-            "plate_wells" => ("", Vec::new(), Vec::new()),
+                    .map(|(_, assignments)| assignments.len())
+                    .sum();
+                let mut labels = Vec::with_capacity(output_count);
+                let mut parents = Vec::with_capacity(output_count);
+                for (plate_id, assignments) in &plate_assignments {
+                    for assignment in assignments {
+                        labels.push(assignment.position.clone());
+                        parents.push(Some(plate_id.clone()));
+                        plate_output_assignments.push((plate_id.clone(), assignment.clone()));
+                    }
+                }
+                ("WELL", labels, parents)
+            }
             "same_sample" => ("", Vec::new(), Vec::new()),
             "none" => ("", Vec::new(), Vec::new()),
             _ => return Err("Unsupported Protocol output mode".into()),
@@ -702,31 +829,44 @@ pub fn execute_with_external(
         if execution.get("engine").and_then(Value::as_str) != Some("sample_flow_v1") {
             metadata.extend(values.as_object().cloned().unwrap_or_else(Map::new));
         }
+        if let Some(assignment) = output_conditions.get(index) {
+            metadata.insert("condition".into(), json!(assignment.condition));
+            if !assignment.dose.is_empty() {
+                metadata.insert("condition_dose".into(), json!(assignment.dose));
+            }
+            if !assignment.duration.is_empty() {
+                metadata.insert("condition_duration".into(), json!(assignment.duration));
+            }
+            metadata.insert("condition_group".into(), json!(assignment.group_index + 1));
+            metadata.insert(
+                "condition_replicate".into(),
+                json!(assignment.replicate_index),
+            );
+            if let Some(position) = &assignment.plate_position {
+                metadata.insert("plate_position".into(), json!(position));
+            }
+        }
         if let Some(parent) = parent_id {
             metadata.insert("source_sample_id".into(), json!(parent));
         }
         metadata.insert("source_record_id".into(), json!(record_id));
         metadata.insert("source_protocol_id".into(), json!(protocol_id));
         metadata.insert("source_protocol_version".into(), json!(version));
-        if output_type == "PLATE" {
+        let is_declarative_user_flow =
+            execution.get("engine").and_then(Value::as_str) == Some("sample_flow_v1");
+        if output_type == "PLATE" && !is_declarative_user_flow {
             let capacity = string_value(&values, "plate_format")
                 .and_then(crate::plate_layout::supported_capacity)
                 .ok_or("Choose a supported plate format for a plate output")?;
             metadata.insert("plate_capacity".into(), json!(capacity));
         }
-        if output_type == "WELL" {
+        if output_type == "WELL" && !is_declarative_user_flow {
             metadata.insert("well_position".into(), json!(label));
-            if let Some(assignment) = plate_assignments
-                .as_ref()
-                .and_then(|assignments| assignments.get(index))
-            {
+            if let Some((source_plate_id, assignment)) = plate_output_assignments.get(index) {
                 metadata.insert("treatment_factor".into(), json!(assignment.factor));
                 metadata.insert("treatment_duration".into(), json!(assignment.duration));
                 metadata.insert("treatment_group".into(), json!(assignment.group_index + 1));
-                metadata.insert(
-                    "source_plate_id".into(),
-                    json!(input.as_ref().map(|(id, _)| id)),
-                );
+                metadata.insert("source_plate_id".into(), json!(source_plate_id));
             }
         }
         insert_sample(
@@ -755,6 +895,23 @@ pub fn execute_with_external(
     }
     if output_mode == "same_sample" {
         for id in &input_ids {
+            tx.execute(
+                "INSERT INTO event_outputs VALUES (?1,?2)",
+                params![event_id, id],
+            )
+            .map_err(|error| error.to_string())?;
+            tx.execute(
+                "INSERT INTO record_samples VALUES (?1,?2,'output')",
+                params![record_id, id],
+            )
+            .map_err(|error| error.to_string())?;
+            output_ids.push(id.clone());
+        }
+    } else if output_mode == "plate_wells" {
+        for (id, sample_type) in &inputs {
+            if sample_type == "PLATE" {
+                continue;
+            }
             tx.execute(
                 "INSERT INTO event_outputs VALUES (?1,?2)",
                 params![event_id, id],
@@ -1130,9 +1287,11 @@ mod tests {
             vec![dish.output_ids[0].clone()],
         )
         .unwrap();
-        assert!(treatment.output_ids.is_empty());
+        assert_eq!(treatment.output_ids, vec![dish.output_ids[0].clone()]);
         let same_identity: i64 = db.query_row("SELECT count(*) FROM event_outputs WHERE event_id='event-r-dish-treatment' AND sample_id=?1", [&dish.output_ids[0]], |row| row.get(0)).unwrap();
         assert_eq!(same_identity, 1);
+        let record_output: i64 = db.query_row("SELECT count(*) FROM record_samples WHERE record_id='r-dish-treatment' AND sample_id=?1 AND role='output'", [&dish.output_ids[0]], |row| row.get(0)).unwrap();
+        assert_eq!(record_output, 1);
         drop(db);
         fs::remove_file(path).unwrap();
     }
@@ -1167,6 +1326,12 @@ mod tests {
         assert!(treatment
             .rendered_content
             .contains("si 123 / 24h：B01, B02, B03"));
+        assert!(treatment
+            .rendered_content
+            .contains("处理对象：孔板（1 个）"));
+        assert!(!treatment
+            .rendered_content
+            .contains("Cell / 培养皿 / 孔刺激"));
         let last_metadata: String = db
             .query_row(
                 "SELECT metadata_json FROM samples WHERE id=?1",
@@ -1179,6 +1344,93 @@ mod tests {
         assert_eq!(metadata["treatment_factor"], "si 123");
         assert_eq!(metadata["treatment_duration"], "24h");
         assert_eq!(metadata["source_plate_id"], plate.output_ids[0]);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn treatment_accepts_multiple_inputs_of_the_same_type() {
+        let (mut db, path) = database();
+        upstream_samples(
+            &db,
+            "cell-treatment",
+            &[
+                ("treatment-cell-a", "CELL", "{}"),
+                ("treatment-cell-b", "CELL", "{}"),
+            ],
+        );
+        let result = execute(
+            &mut db,
+            "cell-treatment",
+            "pro-cell-treatment",
+            "r-cell-treatment",
+            json!({"treatment_type":"TNF-α / 24h"}),
+            vec!["treatment-cell-a".into(), "treatment-cell-b".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            result.output_ids,
+            vec!["treatment-cell-a", "treatment-cell-b"]
+        );
+        assert!(result.rendered_content.contains("处理对象：Cell（2 个）"));
+        assert!(result.rendered_content.contains("刺激类型：TNF-α / 24h"));
+        assert!(!result.rendered_content.contains("孔板刺激布局"));
+        let event_outputs: i64 = db
+            .query_row(
+                "SELECT count(*) FROM event_outputs WHERE event_id='event-r-cell-treatment'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let non_destructive_inputs: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sample_usages WHERE event_id='event-r-cell-treatment' AND usage_type='non_destructive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_outputs, 2);
+        assert_eq!(non_destructive_inputs, 2);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn treatment_rejects_mixed_input_types_atomically() {
+        let (mut db, path) = database();
+        upstream_samples(
+            &db,
+            "mixed-treatment",
+            &[
+                ("treatment-cell-a", "CELL", "{}"),
+                ("treatment-plate-b", "PLATE", r#"{"plate_capacity":6}"#),
+            ],
+        );
+        let error = execute(
+            &mut db,
+            "mixed-treatment",
+            "pro-cell-treatment",
+            "r-mixed-treatment",
+            json!({"treatment_type":"TNF-α"}),
+            vec!["treatment-cell-a".into(), "treatment-plate-b".into()],
+        )
+        .unwrap_err();
+        assert!(error.contains("same Sample type"));
+        let records: i64 = db
+            .query_row(
+                "SELECT count(*) FROM records WHERE id='r-mixed-treatment'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let usages: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sample_usages WHERE event_id='event-r-mixed-treatment'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!((records, usages), (0, 0));
         drop(db);
         fs::remove_file(path).unwrap();
     }
@@ -1250,6 +1502,21 @@ mod tests {
                 .unwrap();
             assert_eq!(versions, 1);
         }
+        let treatment_schema: String = db
+            .query_row(
+                "SELECT pv.schema_json FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version WHERE p.id='pro-cell-treatment'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let treatment_schema: Value = serde_json::from_str(&treatment_schema).unwrap();
+        assert_eq!(treatment_schema["schemaVersion"], 5);
+        assert_eq!(treatment_schema["execution"]["inputCardinality"], "many");
+        assert_eq!(treatment_schema["execution"]["inputTypePolicy"], "uniform");
+        assert!(treatment_schema["execution"]["inputTypes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("CELL")));
         drop(db);
         fs::remove_file(path).unwrap();
     }
@@ -1737,6 +2004,66 @@ mod tests {
             )
             .unwrap();
         assert_eq!(event_outputs, 0);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn generic_condition_groups_map_positions_without_forcing_well_type() {
+        let (mut db, path) = database();
+        upstream_samples(
+            &db,
+            "condition-task",
+            &[
+                ("cell-condition-a", "CELL", "{}"),
+                ("cell-condition-b", "CELL", "{}"),
+            ],
+        );
+        db.execute("INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES ('custom-conditions','Conditions','自定义',1,'#000','','user')", []).unwrap();
+        db.execute(
+            "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES ('custom-conditions',1,?1,'user','now')",
+            [json!({
+                "fields":[
+                    {"key":"plate_format","label":"Plate","kind":"select","required":true},
+                    {"key":"condition_groups","label":"Conditions","kind":"condition_groups","required":true}
+                ],
+                "template":"{{condition_groups_summary}}\n{{output_sample_summary}}",
+                "execution":{
+                    "engine":"sample_flow_v1","eventType":"custom:conditions",
+                    "inputSource":"experiment_samples","inputCardinality":"many",
+                    "inputTypes":["CELL"],"outputType":"CELL",
+                    "outputMode":"per_input_conditions","consumptionPolicy":"non_destructive",
+                    "conditionAllocation":{"plateMapping":true}
+                }
+            }).to_string()],
+        ).unwrap();
+        let result = execute(
+            &mut db,
+            "condition-task",
+            "custom-conditions",
+            "condition-record",
+            json!({
+                "plate_format":"6孔板",
+                "condition_groups":"[{\"condition\":\"Control\",\"dose\":\"\",\"duration\":\"24 h\",\"sampleCount\":2},{\"condition\":\"Drug\",\"dose\":\"10 nM\",\"duration\":\"24 h\",\"sampleCount\":1}]"
+            }),
+            vec!["cell-condition-a".into(), "cell-condition-b".into()],
+        )
+        .unwrap();
+        assert_eq!(result.output_ids.len(), 6);
+        let (sample_type, parent_id, metadata_json): (String, String, String) = db
+            .query_row(
+                "SELECT sample_type,parent_sample_id,metadata_json FROM samples WHERE id=?1",
+                [&result.output_ids[5]],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let metadata: Value = serde_json::from_str(&metadata_json).unwrap();
+        assert_eq!(sample_type, "CELL");
+        assert_eq!(parent_id, "cell-condition-b");
+        assert_eq!(metadata["plate_position"], "A03");
+        assert_eq!(metadata["condition"], "Drug");
+        assert_eq!(metadata["condition_dose"], "10 nM");
+        assert!(result.rendered_content.contains("Control / 24 h：A01, A02"));
         drop(db);
         fs::remove_file(path).unwrap();
     }

@@ -18,6 +18,27 @@ pub struct WellAssignment {
     pub group_index: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionGroup {
+    pub condition: String,
+    #[serde(default)]
+    pub dose: String,
+    #[serde(default)]
+    pub duration: String,
+    pub sample_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConditionAssignment {
+    pub condition: String,
+    pub dose: String,
+    pub duration: String,
+    pub group_index: usize,
+    pub replicate_index: usize,
+    pub plate_position: Option<String>,
+}
+
 pub fn supported_capacity(value: &str) -> Option<usize> {
     for (label, capacity) in [
         ("三百八十四孔", 384),
@@ -120,6 +141,101 @@ pub fn summary(assignments: &[WellAssignment]) -> String {
     lines.join("\n")
 }
 
+pub fn parse_condition_groups(
+    raw: &str,
+    plate_capacity: Option<usize>,
+) -> Result<Vec<ConditionAssignment>, String> {
+    let groups: Vec<ConditionGroup> =
+        serde_json::from_str(raw).map_err(|_| "Condition groups are invalid".to_string())?;
+    if groups.is_empty() {
+        return Err("Add at least one condition group".into());
+    }
+    for group in &groups {
+        if group.condition.trim().is_empty() {
+            return Err("Every condition group requires a condition".into());
+        }
+        if group.sample_count == 0 {
+            return Err("Every condition group must produce at least one Sample".into());
+        }
+    }
+    let requested = groups.iter().try_fold(0usize, |total, group| {
+        total
+            .checked_add(group.sample_count)
+            .ok_or_else(|| "Condition group Sample count is too large".to_string())
+    })?;
+    let limit = plate_capacity.unwrap_or(384);
+    if requested > limit {
+        return Err(if plate_capacity.is_some() {
+            format!(
+                "Condition groups request {requested} positions, exceeding the {limit}-well plate"
+            )
+        } else {
+            "Condition groups may produce at most 384 Samples per input".into()
+        });
+    }
+    let positions = plate_capacity.map(well_positions);
+    let mut assignments = Vec::with_capacity(requested);
+    for (group_index, group) in groups.into_iter().enumerate() {
+        for replicate_index in 1..=group.sample_count {
+            assignments.push(ConditionAssignment {
+                condition: group.condition.trim().to_owned(),
+                dose: group.dose.trim().to_owned(),
+                duration: group.duration.trim().to_owned(),
+                group_index,
+                replicate_index,
+                plate_position: positions
+                    .as_ref()
+                    .and_then(|items| items.get(assignments.len()))
+                    .cloned(),
+            });
+        }
+    }
+    Ok(assignments)
+}
+
+pub fn condition_summary(assignments: &[ConditionAssignment]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for assignment in assignments {
+        let details = [assignment.dose.as_str(), assignment.duration.as_str()]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join(" / ");
+        if let Some(line) = lines.get_mut(assignment.group_index) {
+            if let Some(position) = &assignment.plate_position {
+                line.push_str(&format!(", {position}"));
+            }
+        } else {
+            let suffix = if details.is_empty() {
+                String::new()
+            } else {
+                format!(" / {details}")
+            };
+            let allocation = assignment
+                .plate_position
+                .as_ref()
+                .map(|position| position.to_owned())
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} 个 Sample",
+                        assignments
+                            .iter()
+                            .filter(|item| item.group_index == assignment.group_index)
+                            .count()
+                    )
+                });
+            lines.push(format!(
+                "{}. {}{}：{}",
+                assignment.group_index + 1,
+                assignment.condition,
+                suffix,
+                allocation
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
 pub fn well_positions(capacity: usize) -> Vec<String> {
     let (rows, columns) = match capacity {
         6 => (2, 3),
@@ -182,5 +298,19 @@ mod tests {
             capacity_from_metadata(&json!({"container_name":"六孔板"})),
             Some(6)
         );
+    }
+
+    #[test]
+    fn condition_groups_can_map_any_output_sample_to_plate_positions() {
+        let assignments = parse_condition_groups(
+            r#"[{"condition":"Control","sampleCount":2},{"condition":"Drug","dose":"10 nM","duration":"24 h","sampleCount":1}]"#,
+            Some(6),
+        )
+        .unwrap();
+        assert_eq!(assignments.len(), 3);
+        assert_eq!(assignments[0].plate_position.as_deref(), Some("A01"));
+        assert_eq!(assignments[2].plate_position.as_deref(), Some("A03"));
+        assert_eq!(assignments[2].condition, "Drug");
+        assert_eq!(assignments[2].replicate_index, 1);
     }
 }

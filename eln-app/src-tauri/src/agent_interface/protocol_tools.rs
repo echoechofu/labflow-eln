@@ -57,6 +57,13 @@ pub enum ProtocolConsumptionPolicy {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolMultipleSampleMode {
+    Identical,
+    ConditionGroups,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtocolDraftRequest {
     pub id: String,
@@ -67,6 +74,8 @@ pub struct ProtocolDraftRequest {
     pub input_type: String,
     pub input_type_display_name: Option<String>,
     pub output_behavior: ProtocolOutputBehavior,
+    pub multiple_sample_mode: Option<ProtocolMultipleSampleMode>,
+    pub plate_mapping: Option<bool>,
     pub output_type: Option<String>,
     pub output_type_display_name: Option<String>,
     pub consumption_policy: ProtocolConsumptionPolicy,

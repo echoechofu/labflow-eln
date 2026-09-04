@@ -26,7 +26,7 @@ Record ── record_samples(input/output) ──> Sample
 | 细胞复苏 | 无既有 Sample 输入；生成一个 `CELL`。 |
 | 细胞传代 | 输入 `CELL`；生成 1–96 个 `CELL`，输入标记为 `consumed`。 |
 | 细胞铺板 | 输入 `CELL`；生成 `PLATE` 或 `DISH`。Plate metadata 保存受支持规格的容量。 |
-| 细胞加刺激 | 输入 `PLATE`、`DISH` 或 `WELL`。Plate 按刺激因素、时间和孔数分配孔位，并生成多个 `WELL`；Dish/Well 代表状态变化，不生成新的输出 Sample。 |
+| 细胞加刺激 | 每条 Record 从 `CELL`、`PLATE`、`DISH` 或 `WELL` 中选择一种类型，并可输入该类型的一个或多个 Sample；不同类型不能混选。每个 Plate 按同一套刺激因素、时间和孔数分配孔位，并分别生成多个 `WELL`；Cell/Dish/Well 代表状态变化，原 Sample 以相同身份登记为输出，不创建新身份。 |
 | RNA 提取 | 从 Experiment 的 `CELL`/`WELL`/`DISH` 中选择或登记输入；每个输入生成一个 `RNA`，并消耗输入。 |
 | 逆转录 | 从 Experiment 的 `RNA` 中选择或登记输入；每个输入生成一个 `CDNA`，记录为 `aliquot`。 |
 | qPCR | 从 Experiment 的 `CDNA` 中选择或登记输入；记录 aliquot usage，保存 Targets、Mapping、Raw Cq 与专属 ΔCt/ΔΔCt 分析快照；不创建 Sample，也不创建通用分析 Result。 |
@@ -34,7 +34,7 @@ Record ── record_samples(input/output) ──> Sample
 | 上清收集 | 从 Experiment 的 `CELL`/`WELL`/`DISH` 中选择或登记输入；每个输入生成 `SUP`，输入为 `non_destructive`。 |
 | ELISA | 从 Experiment 的 `SUP` 中选择或登记输入；记录 aliquot usage，保存 Analytes、Mapping 与 Raw OD；不创建 Sample，本阶段不创建分析 Result。 |
 | CCK-8 | 从 Experiment 的 `WELL` 中选择或登记输入；输入按内置 Protocol 标记为 consumed，保存 Conditions、Mapping 与 Raw OD；不创建 Sample，本阶段不创建分析 Result。 |
-| 用户 Sample Flow Protocol | 从 Experiment 选择或登记已声明类型的输入；可声明原 Sample 继续、每个输入派生一个、每个输入派生多个或 measurement-only，并分别选择保留/消耗输入。 |
+| 用户 Sample Flow Protocol | 从 Experiment 选择或登记已声明类型的输入；可声明原 Sample 继续、每个输入派生一个、多个相同条件输出、按条件组派生多个或 measurement-only，并分别选择保留/消耗输入。条件组可选顺序孔位映射，输出类型不受孔位限制。 |
 
 孔板分组只允许 6、12、24、48、96 或 384 孔。系统拒绝超过容量、空分组、缺刺激因素/时间的请求，并按行优先方式分配位置。
 
@@ -52,4 +52,4 @@ Record ── record_samples(input/output) ──> Sample
 
 ## 当前边界
 
-当前有受限的 `sample_flow_v1`，但没有覆盖孔板、终末检测和任意动态字段的完整 Sample input/output DSL。内置专属 execution 分支仍是当前模型的一部分。
+当前有受限的 `sample_flow_v1`，已覆盖用户条件分组和可选顺序孔位映射，但没有覆盖图形化手动选孔、终末检测和任意动态字段的完整 Sample input/output DSL。内置专属 execution 分支仍是当前模型的一部分。
