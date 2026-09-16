@@ -26,6 +26,8 @@ pub struct ConditionGroup {
     pub dose: String,
     #[serde(default)]
     pub duration: String,
+    #[serde(default)]
+    pub method: String,
     pub sample_count: usize,
 }
 
@@ -34,9 +36,11 @@ pub struct ConditionAssignment {
     pub condition: String,
     pub dose: String,
     pub duration: String,
+    pub method: String,
     pub group_index: usize,
     pub replicate_index: usize,
     pub plate_position: Option<String>,
+    pub container_position: Option<String>,
 }
 
 pub fn supported_capacity(value: &str) -> Option<usize> {
@@ -144,6 +148,7 @@ pub fn summary(assignments: &[WellAssignment]) -> String {
 pub fn parse_condition_groups(
     raw: &str,
     plate_capacity: Option<usize>,
+    container_mode: &str,
 ) -> Result<Vec<ConditionAssignment>, String> {
     let groups: Vec<ConditionGroup> =
         serde_json::from_str(raw).map_err(|_| "Condition groups are invalid".to_string())?;
@@ -181,12 +186,18 @@ pub fn parse_condition_groups(
                 condition: group.condition.trim().to_owned(),
                 dose: group.dose.trim().to_owned(),
                 duration: group.duration.trim().to_owned(),
+                method: group.method.trim().to_owned(),
                 group_index,
                 replicate_index,
                 plate_position: positions
                     .as_ref()
                     .and_then(|items| items.get(assignments.len()))
                     .cloned(),
+                container_position: if container_mode == "dish" {
+                    Some(format!("皿 {:02}", assignments.len() + 1))
+                } else {
+                    None
+                },
             });
         }
     }
@@ -196,13 +207,19 @@ pub fn parse_condition_groups(
 pub fn condition_summary(assignments: &[ConditionAssignment]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for assignment in assignments {
-        let details = [assignment.dose.as_str(), assignment.duration.as_str()]
-            .into_iter()
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>()
-            .join(" / ");
+        let details = [
+            assignment.dose.as_str(),
+            assignment.duration.as_str(),
+            assignment.method.as_str(),
+        ]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ");
         if let Some(line) = lines.get_mut(assignment.group_index) {
             if let Some(position) = &assignment.plate_position {
+                line.push_str(&format!(", {position}"));
+            } else if let Some(position) = &assignment.container_position {
                 line.push_str(&format!(", {position}"));
             }
         } else {
@@ -215,6 +232,7 @@ pub fn condition_summary(assignments: &[ConditionAssignment]) -> String {
                 .plate_position
                 .as_ref()
                 .map(|position| position.to_owned())
+                .or_else(|| assignment.container_position.clone())
                 .unwrap_or_else(|| {
                     format!(
                         "{} 个 Sample",
@@ -305,6 +323,7 @@ mod tests {
         let assignments = parse_condition_groups(
             r#"[{"condition":"Control","sampleCount":2},{"condition":"Drug","dose":"10 nM","duration":"24 h","sampleCount":1}]"#,
             Some(6),
+            "plate",
         )
         .unwrap();
         assert_eq!(assignments.len(), 3);
@@ -312,5 +331,22 @@ mod tests {
         assert_eq!(assignments[2].plate_position.as_deref(), Some("A03"));
         assert_eq!(assignments[2].condition, "Drug");
         assert_eq!(assignments[2].replicate_index, 1);
+    }
+
+    #[test]
+    fn dish_condition_groups_keep_methods_and_assign_dish_numbers() {
+        let assignments = parse_condition_groups(
+            r#"[{"condition":"Control","dose":"","duration":"24 h","method":"换液","sampleCount":2},{"condition":"Drug","dose":"10 nM","duration":"24 h","method":"直接加药","sampleCount":1}]"#,
+            None,
+            "dish",
+        )
+        .unwrap();
+        assert_eq!(assignments[0].container_position.as_deref(), Some("皿 01"));
+        assert_eq!(assignments[1].container_position.as_deref(), Some("皿 02"));
+        assert_eq!(assignments[2].container_position.as_deref(), Some("皿 03"));
+        assert_eq!(assignments[2].method, "直接加药");
+        let summary = condition_summary(&assignments);
+        assert!(summary.contains("换液"));
+        assert!(summary.contains("皿 01, 皿 02"));
     }
 }

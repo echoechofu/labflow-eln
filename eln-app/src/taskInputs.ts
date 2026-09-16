@@ -1,4 +1,9 @@
-import type { RecordItem, Sample, Task } from "./domain";
+import {
+  normalizeSampleType,
+  type RecordItem,
+  type Sample,
+  type Task,
+} from "./domain";
 
 export type SampleSourceKind = "direct_parent" | "other_task" | "external";
 
@@ -34,16 +39,41 @@ export function sampleSourceInfo(
   tasks: Task[],
   records: RecordItem[],
 ): SampleSourceInfo {
+  const directParentTask = (currentTask.parentTaskIds || [])
+    .map((parentId) => tasks.find((task) => task.id === parentId))
+    .find(
+      (task) =>
+        task &&
+        records.some(
+          (record) =>
+            record.taskId === task.id &&
+            (record.outputs || []).includes(sample.id),
+        ),
+    );
+  if (directParentTask) {
+    return { kind: "direct_parent", sourceTask: directParentTask };
+  }
   if (sample.origin === "external") return { kind: "external" };
   const sourceRecord = records.find((record) => record.id === sample.source);
   const sourceTask = tasks.find((task) => task.id === sourceRecord?.taskId);
   return {
-    kind:
-      sourceTask && currentTask.parentTaskIds?.includes(sourceTask.id)
-        ? "direct_parent"
-        : "other_task",
+    kind: "other_task",
     sourceTask,
   };
+}
+
+export function eligibleRecordInputSamples(
+  samples: Sample[],
+  experimentId: string,
+  inputTypes: string[],
+) {
+  const acceptedTypes = new Set(inputTypes.map(normalizeSampleType));
+  return samples.filter(
+    (sample) =>
+      !sample.consumed &&
+      sample.experimentId === experimentId &&
+      acceptedTypes.has(normalizeSampleType(sample.type)),
+  );
 }
 
 export function groupSamplesBySource(

@@ -1,22 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import "./task-modal.css";
-import type { Experiment, NavPage, Protocol, Task } from "./domain";
-import {
-  dayLabel,
-  formatTime,
-  normalizeSampleType,
-  sampleTypeLabel,
-  statusLabel,
+import type {
+  Experiment,
+  NavPage,
+  Protocol,
+  RecordAttachment,
+  Task,
 } from "./domain";
+import { dayLabel, formatTime } from "./domain";
 import {
   createExportManifest,
   beginRecordPdf,
   appendRecordPdfPage,
   finishRecordPdf,
   cancelRecordPdf,
+  beginRecordBundlePdf,
+  appendRecordBundlePdfPage,
+  finishRecordBundlePdf,
+  cancelRecordBundlePdf,
   recordImagePreviewUrl,
   chooseRecordImage,
+  chooseRecordFiles,
   chooseWorkspaceBackup,
   deleteProtocol,
   deleteRecord,
@@ -25,19 +30,27 @@ import {
   markExportPrintRequested,
   exportWorkspaceBackup,
   insertRecordImage,
+  insertRecordFiles,
+  openRecordAttachment,
+  saveRecordAttachmentAs,
   restoreWorkspaceBackup,
+  saveExperimentGraphPng,
   saveTask,
-  startTaskRecord,
   uid,
   updateRecordBody,
-  updateTaskStatus,
-  type ExternalSampleDraft,
   type Store,
   type WorkspaceBackupSummary,
 } from "./repository";
+import {
+  experimentGraphPngFileName,
+  renderExperimentGraphPng,
+} from "./experimentGraphPng";
 import { RecordBody } from "./RecordBody";
+import { TaskDrawer } from "./RecordCreationDrawer";
 import { recordPdfBlocks, renderRecordPdf } from "./recordPdf";
 import {
+  attachmentLabelFromPath,
+  insertFileReferences,
   imageCaptionFromPath,
   insertImageReference,
   parseRecordBody,
@@ -47,13 +60,7 @@ import {
   TASK_GRAPH_NODE_HEIGHT,
   TASK_GRAPH_NODE_WIDTH,
 } from "./taskGraph";
-import {
-  eligibleParentTaskOptions,
-  groupSamplesBySource,
-  sampleSourceInfo,
-  type SampleSourceKind,
-} from "./taskInputs";
-import { searchProtocols } from "./protocolSearch";
+import { eligibleParentTaskOptions } from "./taskInputs";
 import TerminalAssayWorkspace from "./TerminalAssayWorkspace";
 import {
   ProtocolCreationWizard,
@@ -84,35 +91,6 @@ const sameDate = (value: string, d: Date) => {
     x.getMonth() === d.getMonth() &&
     x.getDate() === d.getDate()
   );
-};
-
-type PlateTreatmentGroup = {
-  factor: string;
-  duration: string;
-  wellCount: number;
-};
-
-type SampleConditionGroup = {
-  condition: string;
-  dose: string;
-  duration: string;
-  sampleCount: number;
-};
-
-const plateCapacity = (value: unknown) => {
-  const text = String(value ?? "");
-  const chineseCapacity = [
-    ["三百八十四孔", 384],
-    ["九十六孔", 96],
-    ["四十八孔", 48],
-    ["二十四孔", 24],
-    ["十二孔", 12],
-    ["六孔", 6],
-  ].find(([label]) => text.includes(String(label)))?.[1];
-  if (chineseCapacity) return Number(chineseCapacity);
-  const match = text.match(/\d+/);
-  const capacity = match ? Number(match[0]) : 0;
-  return [6, 12, 24, 48, 96, 384].includes(capacity) ? capacity : 0;
 };
 
 function freshTask(): Task {
@@ -546,1059 +524,6 @@ function Day({
   );
 }
 
-function TaskDrawer({
-  task,
-  experiment,
-  samples,
-  sampleTypes,
-  protocols,
-  tasks,
-  records,
-  close,
-  edit,
-  openRecord,
-  changed,
-  protocolsChanged,
-}: {
-  task: Task;
-  experiment?: Experiment;
-  samples: Store["samples"];
-  sampleTypes: Store["sampleTypes"];
-  protocols: Store["protocols"];
-  tasks: Store["tasks"];
-  records: Store["records"];
-  close: () => void;
-  edit: () => void;
-  openRecord: () => void;
-  changed: () => void;
-  protocolsChanged: () => void;
-}) {
-  const [error, setError] = useState("");
-  const [choosingProtocol, setChoosingProtocol] = useState(false);
-  const [protocolQuery, setProtocolQuery] = useState("");
-  const [creatingProtocol, setCreatingProtocol] = useState(false);
-  const [protocol, setProtocol] = useState<Protocol>();
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [inputSampleIds, setInputSampleIds] = useState<string[]>([]);
-  const [inputMode, setInputMode] = useState<"existing" | "external">(
-    "existing",
-  );
-  const [activeSampleGroup, setActiveSampleGroup] =
-    useState<SampleSourceKind>("direct_parent");
-  const [externalSampleType, setExternalSampleType] = useState("");
-  const [externalPlateFormat, setExternalPlateFormat] = useState("");
-  const [externalSampleCount, setExternalSampleCount] = useState(1);
-  const [externalSamples, setExternalSamples] = useState<
-    { displayName: string; conditions: string }[]
-  >([{ displayName: "", conditions: "" }]);
-  const [plateGroups, setPlateGroups] = useState<PlateTreatmentGroup[]>([
-    { factor: "", duration: "", wellCount: 1 },
-  ]);
-  const [conditionGroups, setConditionGroups] = useState<
-    SampleConditionGroup[]
-  >([{ condition: "", dose: "", duration: "", sampleCount: 1 }]);
-  const protocolResults = searchProtocols(protocols, protocolQuery);
-  const closeProtocolPicker = () => {
-    setChoosingProtocol(false);
-    setCreatingProtocol(false);
-    setProtocol(undefined);
-    setProtocolQuery("");
-  };
-  const usesExperimentSampleInput = [
-    "parent_task_outputs",
-    "experiment_samples",
-  ].includes(protocol?.execution?.inputSource || "");
-  const selectedInput = samples.find(
-    (sample) => sample.id === values.input_sample,
-  );
-  const selectedInputType =
-    (selectedInput && normalizeSampleType(selectedInput.type)) ||
-    ({ 孔板: "PLATE", 培养皿: "DISH", 孔: "WELL" }[values.new_object_type] as
-      string | undefined);
-  const selectedExperimentInputs = samples.filter((sample) =>
-    inputSampleIds.includes(sample.id),
-  );
-  const requiresUniformInputType =
-    protocol?.execution?.inputTypePolicy === "uniform";
-  const selectedCanonicalInputType = selectedExperimentInputs[0]
-    ? normalizeSampleType(selectedExperimentInputs[0].type)
-    : undefined;
-  const activeInputTypes = usesExperimentSampleInput
-    ? inputMode === "existing"
-      ? selectedExperimentInputs.map((sample) =>
-          normalizeSampleType(sample.type),
-        )
-      : externalSampleType
-        ? [normalizeSampleType(externalSampleType)]
-        : []
-    : selectedInputType
-      ? [selectedInputType]
-      : [];
-  const selectedPlateCapacities = selectedExperimentInputs
-    .filter((sample) => normalizeSampleType(sample.type) === "PLATE")
-    .map(
-      (sample) =>
-        plateCapacity(sample.metadata?.plate_capacity) ||
-        plateCapacity(sample.metadata?.plate_format) ||
-        plateCapacity(sample.metadata?.container_name),
-    )
-    .filter((capacity) => capacity > 0);
-  const selectedPlateCapacity = usesExperimentSampleInput
-    ? inputMode === "external"
-      ? plateCapacity(externalPlateFormat)
-      : selectedPlateCapacities.length
-        ? Math.min(...selectedPlateCapacities)
-        : 0
-    : plateCapacity(selectedInput?.metadata?.plate_capacity) ||
-      plateCapacity(selectedInput?.metadata?.plate_format) ||
-      plateCapacity(selectedInput?.metadata?.container_name) ||
-      plateCapacity(values.new_plate_format);
-  const usesConditionAllocation =
-    protocol?.execution?.outputMode === "per_input_conditions";
-  const mapsConditionsToPlate =
-    protocol?.execution?.conditionAllocation?.plateMapping === true;
-  const conditionPlateCapacity = mapsConditionsToPlate
-    ? plateCapacity(values.plate_format)
-    : 0;
-  const eligibleInputSamples = samples.filter((sample) => {
-    if (!usesExperimentSampleInput) return false;
-    if (sample.consumed) return false;
-    if (sample.experimentId !== task.experimentId) return false;
-    if (
-      !(protocol?.execution?.inputTypes ?? [])
-        .map(normalizeSampleType)
-        .includes(normalizeSampleType(sample.type))
-    )
-      return false;
-    return true;
-  });
-  const sampleGroups = groupSamplesBySource(
-    eligibleInputSamples,
-    task,
-    tasks,
-    records,
-  );
-  const sampleGroupLabels: Record<SampleSourceKind, string> = {
-    direct_parent: "直接上级 Task 输出",
-    other_task: "其他 Task 输出",
-    external: "外部登记 Sample",
-  };
-  const selectedInGroup = (kind: SampleSourceKind) =>
-    sampleGroups[kind].filter((sample) => inputSampleIds.includes(sample.id))
-      .length;
-  const toggleInputSample = (sampleId: string, selected: boolean) => {
-    setInputMode("existing");
-    const sample = samples.find((item) => item.id === sampleId);
-    if (
-      selected &&
-      requiresUniformInputType &&
-      selectedCanonicalInputType &&
-      sample &&
-      normalizeSampleType(sample.type) !== selectedCanonicalInputType
-    ) {
-      setError(
-        `同一条 Record 的输入 Sample 必须属于同一种类型；请先取消已选的 ${sampleTypeLabel(selectedCanonicalInputType)}。`,
-      );
-      return;
-    }
-    setInputSampleIds((current) =>
-      selected
-        ? current.includes(sampleId)
-          ? current
-          : [...current, sampleId]
-        : current.filter((id) => id !== sampleId),
-    );
-    setError("");
-  };
-  const renderSampleOption = (sample: Store["samples"][number]) => {
-    const incompatibleType =
-      requiresUniformInputType &&
-      Boolean(selectedCanonicalInputType) &&
-      normalizeSampleType(sample.type) !== selectedCanonicalInputType &&
-      !inputSampleIds.includes(sample.id);
-    const source = sampleSourceInfo(sample, task, tasks, records);
-    const sourceText = source.sourceTask
-      ? `来源：${source.sourceTask.title} · ${dayLabel(source.sourceTask.start)} ${formatTime(source.sourceTask.start)}`
-      : source.kind === "external"
-        ? "外部登记 · 无来源 Task"
-        : "来源 Task 不可用";
-    return (
-      <label
-        className={`sample-source-option${incompatibleType ? " incompatible" : ""}`}
-        key={sample.id}
-      >
-        <input
-          type="checkbox"
-          checked={inputSampleIds.includes(sample.id)}
-          disabled={incompatibleType}
-          onChange={(event) =>
-            toggleInputSample(sample.id, event.target.checked)
-          }
-        />
-        <span>
-          <span className={`sample-source-badge ${source.kind}`}>
-            {source.kind === "direct_parent"
-              ? "直接上级"
-              : source.kind === "other_task"
-                ? "其他 Task"
-                : "外部登记"}
-          </span>
-          <b>{sample.code}</b>
-          <small>
-            {sample.displayName || sampleTypeLabel(sample.type)} · {sourceText}
-            {sample.metadata?.treatment_factor
-              ? ` · ${String(sample.metadata.treatment_factor)}`
-              : ""}
-            {sample.metadata?.treatment_duration
-              ? ` · ${String(sample.metadata.treatment_duration)}`
-              : ""}
-            {incompatibleType
-              ? ` · 已选择 ${sampleTypeLabel(selectedCanonicalInputType || "")}，不可混选`
-              : ""}
-          </small>
-        </span>
-      </label>
-    );
-  };
-  const selectProtocol = (item: Protocol) => {
-    setProtocol(item);
-    setError("");
-    setInputSampleIds([]);
-    setInputMode("existing");
-    setExternalSampleType(item.execution?.inputTypes?.[0] || "");
-    setExternalPlateFormat("");
-    setExternalSampleCount(1);
-    setExternalSamples([{ displayName: "", conditions: "" }]);
-    setConditionGroups([
-      { condition: "", dose: "", duration: "", sampleCount: 1 },
-    ]);
-    setPlateGroups([{ factor: "", duration: "", wellCount: 1 }]);
-    const inputTypes = (item.execution?.inputTypes || []).map(
-      normalizeSampleType,
-    );
-    const candidates = samples.filter(
-      (sample) =>
-        !sample.consumed &&
-        sample.experimentId === task.experimentId &&
-        inputTypes.includes(normalizeSampleType(sample.type)),
-    );
-    const groups = groupSamplesBySource(candidates, task, tasks, records);
-    setActiveSampleGroup(
-      groups.direct_parent.length
-        ? "direct_parent"
-        : groups.other_task.length
-          ? "other_task"
-          : "external",
-    );
-    setValues(
-      Object.fromEntries(
-        (item.fields || [])
-          .filter((field) => field.defaultValue !== undefined)
-          .map((field) => [field.key, field.defaultValue || ""]),
-      ),
-    );
-  };
-  const complete = async () => {
-    try {
-      await updateTaskStatus(task.id, "completed");
-      changed();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  };
-  const start = async () => {
-    if (!protocol) return;
-    if (
-      usesExperimentSampleInput &&
-      inputMode === "existing" &&
-      inputSampleIds.length === 0
-    )
-      return setError("请从当前 Experiment 中选择至少一个 Sample。");
-    if (
-      usesExperimentSampleInput &&
-      inputMode === "external" &&
-      (!externalSampleType ||
-        externalSamples.length === 0 ||
-        externalSamples.some((sample) => !sample.displayName.trim()))
-    )
-      return setError("请填写所有迁入 Sample 的类型和 Label。");
-    if (
-      usesExperimentSampleInput &&
-      inputMode === "external" &&
-      normalizeSampleType(externalSampleType) === "PLATE" &&
-      !plateCapacity(externalPlateFormat)
-    )
-      return setError("请填写迁入孔板的规格。");
-    if (
-      protocol.fields?.some(
-        (field) =>
-          field.required &&
-          field.kind !== "condition_groups" &&
-          !values[field.key]?.trim(),
-      )
-    )
-      return setError("请填写所有必填字段。");
-    if (protocol.execution?.eventType === "plating") {
-      if (
-        values.container_type === "孔板" &&
-        !plateCapacity(values.plate_format)
-      )
-        return setError("请选择孔板规格。");
-    }
-    if (
-      protocol.execution?.eventType === "treatment" &&
-      activeInputTypes.includes("PLATE")
-    ) {
-      const used = plateGroups.reduce(
-        (total, group) => total + group.wellCount,
-        0,
-      );
-      if (!selectedPlateCapacity) return setError("所选孔板缺少孔板规格。");
-      if (plateGroups.length === 0) return setError("请增加至少一个刺激分组。");
-      const invalidGroup = plateGroups.findIndex(
-        (group) =>
-          !group.factor.trim() ||
-          !group.duration.trim() ||
-          !Number.isInteger(group.wellCount) ||
-          group.wellCount < 1,
-      );
-      if (invalidGroup >= 0) {
-        const group = plateGroups[invalidGroup];
-        const missing = [
-          !group.factor.trim() && "刺激因素",
-          !group.duration.trim() && "刺激时间",
-          (!Number.isInteger(group.wellCount) || group.wellCount < 1) && "孔数",
-        ].filter(Boolean);
-        return setError(
-          `第 ${invalidGroup + 1} 组缺少或未正确填写：${missing.join("、")}。`,
-        );
-      }
-      if (used > selectedPlateCapacity)
-        return setError(
-          `已分配 ${used} 孔，超过 ${selectedPlateCapacity} 孔板容量。`,
-        );
-    }
-    if (
-      protocol.execution?.eventType === "treatment" &&
-      activeInputTypes.some((type) =>
-        ["CELL", "DISH", "WELL"].includes(type),
-      ) &&
-      !values.treatment_type?.trim()
-    )
-      return setError("请填写 Cell / 培养皿 / 孔的刺激类型。");
-    if (usesConditionAllocation) {
-      if (conditionGroups.length === 0)
-        return setError("请增加至少一个实验条件组。");
-      const invalidGroup = conditionGroups.findIndex(
-        (group) =>
-          !group.condition.trim() ||
-          !Number.isInteger(group.sampleCount) ||
-          group.sampleCount < 1,
-      );
-      if (invalidGroup >= 0)
-        return setError(
-          `第 ${invalidGroup + 1} 组需要填写实验条件和有效的 Sample 数量。`,
-        );
-      const total = conditionGroups.reduce(
-        (sum, group) => sum + group.sampleCount,
-        0,
-      );
-      if (mapsConditionsToPlate && !conditionPlateCapacity)
-        return setError("请选择孔板规格。");
-      if (mapsConditionsToPlate && total > conditionPlateCapacity)
-        return setError(
-          `每个输入将分配 ${total} 个位置，超过 ${conditionPlateCapacity} 孔板容量。`,
-        );
-      if (!mapsConditionsToPlate && total > 384)
-        return setError("每个输入最多产生 384 个按条件分配的 Sample。");
-    }
-    try {
-      let submittedValues = values;
-      if (
-        protocol.execution?.eventType === "treatment" &&
-        activeInputTypes.includes("PLATE")
-      ) {
-        submittedValues = {
-          ...submittedValues,
-          treatment_groups: JSON.stringify(plateGroups),
-        };
-      }
-      if (usesConditionAllocation) {
-        submittedValues = {
-          ...submittedValues,
-          condition_groups: JSON.stringify(conditionGroups),
-        };
-      }
-      await startTaskRecord(
-        task.id,
-        protocol.id,
-        uid("rec"),
-        submittedValues,
-        usesExperimentSampleInput && inputMode === "existing"
-          ? inputSampleIds
-          : values.input_sample
-            ? [values.input_sample]
-            : [],
-        usesExperimentSampleInput && inputMode === "external"
-          ? externalSamples.map((sample): ExternalSampleDraft => ({
-              sampleType: externalSampleType,
-              displayName: sample.displayName.trim(),
-              metadata: {
-                ...(sample.conditions.trim()
-                  ? { existing_conditions: sample.conditions.trim() }
-                  : {}),
-                ...(normalizeSampleType(externalSampleType) === "PLATE"
-                  ? {
-                      plate_format: externalPlateFormat,
-                      plate_capacity: plateCapacity(externalPlateFormat),
-                    }
-                  : {}),
-              },
-            }))
-          : [],
-      );
-      changed();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  };
-  return (
-    <div className="overlay">
-      <aside className="drawer">
-        <button className="close" onClick={close} aria-label="关闭">
-          ×
-        </button>
-        <span className={`status ${task.status}`}>
-          {statusLabel[task.status]}
-        </span>
-        <h2>{task.title}</h2>
-        <p className="drawer-exp">
-          <i style={{ background: experiment?.color || "#6957e8" }} />
-          {experiment?.title || "未归属实验"}
-        </p>
-        <dl>
-          <div>
-            <dt>时间</dt>
-            <dd>
-              {dayLabel(task.start)} · {formatTime(task.start)}–
-              {formatTime(task.end)}
-            </dd>
-          </div>
-        </dl>
-        <button
-          className="primary wide"
-          onClick={
-            task.recordId
-              ? openRecord
-              : () => {
-                  setProtocolQuery("");
-                  setChoosingProtocol(true);
-                }
-          }
-        >
-          打开记录 →
-        </button>
-        <button className="secondary wide" onClick={edit}>
-          修改任务
-        </button>
-        {task.status !== "completed" && (
-          <button className="secondary wide" onClick={() => void complete()}>
-            ✓ 标记为完成
-          </button>
-        )}
-        {error && <p className="form-error">{error}</p>}
-        {choosingProtocol && (
-          <div className="overlay centered">
-            <div className={`modal ${protocol ? "" : "protocol-search-modal"}`}>
-              <button
-                className="close"
-                onClick={closeProtocolPicker}
-                aria-label="关闭 Protocol 选择"
-              >
-                ×
-              </button>
-              {!protocol ? (
-                <>
-                  <p className="eyebrow">OPEN RECORD</p>
-                  <h2>选择 Protocol</h2>
-                  <label className="protocol-search-field">
-                    <span>搜索 Protocol</span>
-                    <input
-                      autoFocus
-                      type="search"
-                      value={protocolQuery}
-                      onChange={(event) => setProtocolQuery(event.target.value)}
-                      placeholder="输入名称、描述或分类"
-                    />
-                  </label>
-                  {!protocolQuery.trim() ? (
-                    <div className="protocol-search-prompt">
-                      输入关键词后显示匹配的 Protocol。
-                    </div>
-                  ) : protocolResults.length ? (
-                    <div className="protocol-search-results">
-                      <small>找到 {protocolResults.length} 个 Protocol</small>
-                      {protocolResults.map((item) => (
-                        <button
-                          className="picker"
-                          onClick={() => selectProtocol(item)}
-                          key={item.id}
-                        >
-                          <div>
-                            <b>{item.name}</b>
-                            <small>
-                              {item.category}
-                              {item.description ? ` · ${item.description}` : ""}
-                            </small>
-                          </div>
-                          →
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="protocol-search-empty">
-                      <b>没有找到“{protocolQuery.trim()}”</b>
-                      <p>可以创建新的 Protocol，并继续用于当前 Record。</p>
-                      <button
-                        className="primary"
-                        onClick={() => setCreatingProtocol(true)}
-                      >
-                        ＋ 新增 Protocol
-                      </button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <h2>{protocol.name}</h2>
-                  {usesExperimentSampleInput && (
-                    <fieldset className="protocol-inputs">
-                      <legend>1. 本次实验使用什么 Sample？</legend>
-                      {inputMode === "existing" &&
-                        inputSampleIds.length > 0 && (
-                          <div className="selected-sample-summary">
-                            <b>已选择 {inputSampleIds.length} 个 Sample</b>
-                            <span>
-                              {inputSampleIds
-                                .map(
-                                  (id) =>
-                                    samples.find((sample) => sample.id === id)
-                                      ?.code,
-                                )
-                                .filter(Boolean)
-                                .join("、")}
-                            </span>
-                          </div>
-                        )}
-                      <div className="sample-source-groups">
-                        {(
-                          [
-                            "direct_parent",
-                            "other_task",
-                            "external",
-                          ] as SampleSourceKind[]
-                        ).map((kind, index) => (
-                          <button
-                            type="button"
-                            className={
-                              activeSampleGroup === kind ? "active" : ""
-                            }
-                            key={kind}
-                            onClick={() => setActiveSampleGroup(kind)}
-                          >
-                            <span>
-                              <i>{index + 1}</i>
-                              <b>{sampleGroupLabels[kind]}</b>
-                            </span>
-                            <small>
-                              {sampleGroups[kind].length} 个可用
-                              {selectedInGroup(kind) > 0
-                                ? ` · 已选 ${selectedInGroup(kind)}`
-                                : ""}
-                            </small>
-                            <em>{activeSampleGroup === kind ? "▼" : "▶"}</em>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="sample-source-panel">
-                        {activeSampleGroup !== "external" && (
-                          <>
-                            {sampleGroups[activeSampleGroup].map(
-                              renderSampleOption,
-                            )}
-                            {sampleGroups[activeSampleGroup].length === 0 && (
-                              <p className="form-hint">
-                                该来源中没有符合此 Protocol 的可用 Sample。
-                              </p>
-                            )}
-                          </>
-                        )}
-                        {activeSampleGroup === "external" && (
-                          <>
-                            {inputMode === "existing" &&
-                              sampleGroups.external.map(renderSampleOption)}
-                            {inputMode === "existing" &&
-                              sampleGroups.external.length === 0 && (
-                                <p className="form-hint">
-                                  当前 Experiment 没有已登记的外部 Sample。
-                                </p>
-                              )}
-                            {inputMode === "existing" ? (
-                              <button
-                                className="link-button register-external-button"
-                                type="button"
-                                onClick={() => {
-                                  setInputMode("external");
-                                  setInputSampleIds([]);
-                                  setError("");
-                                }}
-                              >
-                                ＋ 登记新的当前已有 Sample
-                              </button>
-                            ) : (
-                              <div className="external-sample-form">
-                                <button
-                                  className="link-button"
-                                  type="button"
-                                  onClick={() => {
-                                    setInputMode("existing");
-                                    setError("");
-                                  }}
-                                >
-                                  ← 选择已登记的外部 Sample
-                                </button>
-                                <label className="task-form">
-                                  Sample type
-                                  <select
-                                    value={externalSampleType}
-                                    onChange={(event) =>
-                                      setExternalSampleType(event.target.value)
-                                    }
-                                  >
-                                    {(protocol.execution?.inputTypes || []).map(
-                                      (sampleType) => (
-                                        <option
-                                          key={sampleType}
-                                          value={sampleType}
-                                        >
-                                          {sampleTypeLabel(sampleType)}
-                                        </option>
-                                      ),
-                                    )}
-                                  </select>
-                                </label>
-                                {normalizeSampleType(externalSampleType) ===
-                                  "PLATE" && (
-                                  <label className="task-form">
-                                    孔板规格
-                                    <select
-                                      value={externalPlateFormat}
-                                      onChange={(event) =>
-                                        setExternalPlateFormat(
-                                          event.target.value,
-                                        )
-                                      }
-                                    >
-                                      <option value="">请选择</option>
-                                      {[
-                                        "6孔板",
-                                        "12孔板",
-                                        "24孔板",
-                                        "48孔板",
-                                        "96孔板",
-                                        "384孔板",
-                                      ].map((format) => (
-                                        <option key={format}>{format}</option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                )}
-                                <label className="task-form">
-                                  数量
-                                  <input
-                                    type="number"
-                                    min="1"
-                                    max="96"
-                                    value={externalSampleCount}
-                                    onChange={(event) => {
-                                      const count = Math.max(
-                                        1,
-                                        Math.min(
-                                          96,
-                                          Number(event.target.value) || 1,
-                                        ),
-                                      );
-                                      setExternalSampleCount(count);
-                                      setExternalSamples((current) =>
-                                        Array.from(
-                                          { length: count },
-                                          (_, index) =>
-                                            current[index] || {
-                                              displayName: "",
-                                              conditions: "",
-                                            },
-                                        ),
-                                      );
-                                    }}
-                                  />
-                                </label>
-                                {externalSamples.map((sample, index) => (
-                                  <div
-                                    className="external-sample-row"
-                                    key={index}
-                                  >
-                                    <b>Sample {index + 1}</b>
-                                    <label>
-                                      Label
-                                      <input
-                                        value={sample.displayName}
-                                        onChange={(event) =>
-                                          setExternalSamples((current) =>
-                                            current.map((item, itemIndex) =>
-                                              itemIndex === index
-                                                ? {
-                                                    ...item,
-                                                    displayName:
-                                                      event.target.value,
-                                                  }
-                                                : item,
-                                            ),
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                    <label>
-                                      已有实验条件（可选）
-                                      <input
-                                        placeholder="例如 siNC，24 h"
-                                        value={sample.conditions}
-                                        onChange={(event) =>
-                                          setExternalSamples((current) =>
-                                            current.map((item, itemIndex) =>
-                                              itemIndex === index
-                                                ? {
-                                                    ...item,
-                                                    conditions:
-                                                      event.target.value,
-                                                  }
-                                                : item,
-                                            ),
-                                          )
-                                        }
-                                      />
-                                    </label>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </fieldset>
-                  )}
-                  {protocol.fields?.map((field) => {
-                    const visible =
-                      (!field.visibleWhen ||
-                        values[field.visibleWhen.key] ===
-                          field.visibleWhen.value) &&
-                      (!field.visibleForInputTypes ||
-                        activeInputTypes.some((type) =>
-                          field.visibleForInputTypes?.includes(type),
-                        ));
-                    if (!visible) return null;
-                    if (field.kind === "plate_layout")
-                      return (
-                        <div className="task-form" key={field.key}>
-                          <span>{field.label}</span>
-                          <PlateLayoutEditor
-                            capacity={selectedPlateCapacity}
-                            groups={plateGroups}
-                            onChange={(groups) => {
-                              setPlateGroups(groups);
-                              setError("");
-                            }}
-                          />
-                        </div>
-                      );
-                    if (field.kind === "condition_groups")
-                      return (
-                        <div className="task-form" key={field.key}>
-                          <span>{field.label}</span>
-                          <ConditionGroupEditor
-                            capacity={conditionPlateCapacity}
-                            plateMapping={mapsConditionsToPlate}
-                            groups={conditionGroups}
-                            onChange={(groups) => {
-                              setConditionGroups(groups);
-                              setError("");
-                            }}
-                          />
-                        </div>
-                      );
-                    return (
-                      <label className="task-form" key={field.key}>
-                        {field.label}
-                        {field.kind === "samples" ? (
-                          <select
-                            value={values[field.key] || ""}
-                            onChange={(e) =>
-                              setValues({
-                                ...values,
-                                [field.key]: e.target.value,
-                              })
-                            }
-                          >
-                            <option value="">新建对象（不选择现有样本）</option>
-                            {samples
-                              .filter(
-                                (sample) =>
-                                  !sample.consumed &&
-                                  sample.experimentId === task.experimentId &&
-                                  (protocol.execution?.inputTypes ?? [])
-                                    .map(normalizeSampleType)
-                                    .includes(normalizeSampleType(sample.type)),
-                              )
-                              .map((sample) => (
-                                <option value={sample.id} key={sample.id}>
-                                  {sample.code}
-                                </option>
-                              ))}
-                          </select>
-                        ) : field.kind === "select" ? (
-                          <select
-                            value={values[field.key] || ""}
-                            onChange={(e) =>
-                              setValues({
-                                ...values,
-                                [field.key]: e.target.value,
-                              })
-                            }
-                          >
-                            <option value="">请选择</option>
-                            {field.options?.map((option) => (
-                              <option key={option}>{option}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            value={values[field.key] || ""}
-                            onChange={(e) =>
-                              setValues({
-                                ...values,
-                                [field.key]: e.target.value,
-                              })
-                            }
-                          />
-                        )}
-                      </label>
-                    );
-                  })}
-                  {error && (
-                    <p className="form-error protocol-error">{error}</p>
-                  )}
-                  <button className="primary wide" onClick={() => void start()}>
-                    创建实验记录
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-        {creatingProtocol && (
-          <ProtocolCreationWizard
-            sampleTypes={sampleTypes}
-            initialName={protocolQuery.trim()}
-            close={() => setCreatingProtocol(false)}
-            saved={protocolsChanged}
-          />
-        )}
-      </aside>
-    </div>
-  );
-}
-
-function PlateLayoutEditor({
-  capacity,
-  groups,
-  onChange,
-}: {
-  capacity: number;
-  groups: PlateTreatmentGroup[];
-  onChange: (groups: PlateTreatmentGroup[]) => void;
-}) {
-  const used = groups.reduce((total, group) => total + group.wellCount, 0);
-  const update = (index: number, patch: Partial<PlateTreatmentGroup>) =>
-    onChange(
-      groups.map((group, groupIndex) =>
-        groupIndex === index ? { ...group, ...patch } : group,
-      ),
-    );
-  return (
-    <div className="plate-layout">
-      <div className={`plate-capacity ${used > capacity ? "over" : ""}`}>
-        <b>{capacity ? `${capacity} 孔板` : "孔板规格缺失"}</b>
-        <span>
-          已分配 {used} / {capacity || "?"} 孔
-        </span>
-      </div>
-      <div className="plate-group plate-group-head" aria-hidden="true">
-        <span />
-        <b>刺激因素（必填）</b>
-        <b>刺激时间（必填）</b>
-        <b>孔数（必填）</b>
-        <span />
-      </div>
-      {groups.map((group, index) => (
-        <div className="plate-group" key={index}>
-          <span>{index + 1}</span>
-          <input
-            aria-label={`第 ${index + 1} 组刺激因素`}
-            placeholder="刺激因素，如 si NC"
-            value={group.factor}
-            onChange={(event) => update(index, { factor: event.target.value })}
-          />
-          <input
-            aria-label={`第 ${index + 1} 组刺激时间`}
-            placeholder="刺激时间，如 24h"
-            value={group.duration}
-            onChange={(event) =>
-              update(index, { duration: event.target.value })
-            }
-          />
-          <input
-            aria-label={`第 ${index + 1} 组孔数`}
-            type="number"
-            min="1"
-            max={capacity || 384}
-            value={group.wellCount}
-            onChange={(event) =>
-              update(index, { wellCount: Number(event.target.value) })
-            }
-          />
-          <button
-            type="button"
-            aria-label={`删除第 ${index + 1} 组`}
-            disabled={groups.length === 1}
-            onClick={() => onChange(groups.filter((_, item) => item !== index))}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="add-plate-group"
-        onClick={() =>
-          onChange([...groups, { factor: "", duration: "", wellCount: 1 }])
-        }
-      >
-        ＋ 增加刺激分组
-      </button>
-      {capacity > 0 && used > capacity && (
-        <p className="form-error">分组孔数不能超过孔板容量。</p>
-      )}
-    </div>
-  );
-}
-
-function ConditionGroupEditor({
-  capacity,
-  plateMapping,
-  groups,
-  onChange,
-}: {
-  capacity: number;
-  plateMapping: boolean;
-  groups: SampleConditionGroup[];
-  onChange: (groups: SampleConditionGroup[]) => void;
-}) {
-  const used = groups.reduce((total, group) => total + group.sampleCount, 0);
-  const update = (index: number, patch: Partial<SampleConditionGroup>) =>
-    onChange(
-      groups.map((group, groupIndex) =>
-        groupIndex === index ? { ...group, ...patch } : group,
-      ),
-    );
-  return (
-    <div className="condition-layout">
-      <div
-        className={`plate-capacity ${plateMapping && capacity > 0 && used > capacity ? "over" : ""}`}
-      >
-        <b>{plateMapping ? `${capacity || "?"} 孔板` : "不映射孔板"}</b>
-        <span>
-          每个输入产生 {used} 个 Sample
-          {plateMapping ? ` · 已分配 ${used} / ${capacity || "?"} 孔` : ""}
-        </span>
-      </div>
-      <div className="condition-group condition-group-head" aria-hidden="true">
-        <span />
-        <b>实验条件（必填）</b>
-        <b>浓度（可选）</b>
-        <b>处理时间（可选）</b>
-        <b>数量</b>
-        <span />
-      </div>
-      {groups.map((group, index) => (
-        <div className="condition-group" key={index}>
-          <span>{index + 1}</span>
-          <input
-            aria-label={`第 ${index + 1} 组实验条件`}
-            placeholder="例如 Control 或 TNF-α"
-            value={group.condition}
-            onChange={(event) =>
-              update(index, { condition: event.target.value })
-            }
-          />
-          <input
-            aria-label={`第 ${index + 1} 组浓度`}
-            placeholder="例如 10 ng/mL"
-            value={group.dose}
-            onChange={(event) => update(index, { dose: event.target.value })}
-          />
-          <input
-            aria-label={`第 ${index + 1} 组处理时间`}
-            placeholder="例如 24 h"
-            value={group.duration}
-            onChange={(event) =>
-              update(index, { duration: event.target.value })
-            }
-          />
-          <input
-            aria-label={`第 ${index + 1} 组 Sample 数量`}
-            type="number"
-            min="1"
-            max={plateMapping ? capacity || 384 : 384}
-            value={group.sampleCount}
-            onChange={(event) =>
-              update(index, { sampleCount: Number(event.target.value) })
-            }
-          />
-          <button
-            type="button"
-            aria-label={`删除第 ${index + 1} 组`}
-            disabled={groups.length === 1}
-            onClick={() => onChange(groups.filter((_, item) => item !== index))}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="add-plate-group"
-        onClick={() =>
-          onChange([
-            ...groups,
-            { condition: "", dose: "", duration: "", sampleCount: 1 },
-          ])
-        }
-      >
-        ＋ 增加条件组
-      </button>
-    </div>
-  );
-}
-
 function ExperimentsPage({
   store,
   openTask,
@@ -1607,6 +532,8 @@ function ExperimentsPage({
   openTask: (task: Task) => void;
 }) {
   const [selectedExperimentId, setSelectedExperimentId] = useState<string>();
+  const [exportingGraph, setExportingGraph] = useState(false);
+  const [graphExportMessage, setGraphExportMessage] = useState("");
   const selectedExperiment = store.experiments.find(
     (experiment) => experiment.id === selectedExperimentId,
   );
@@ -1694,6 +621,48 @@ function ExperimentsPage({
   );
   const firstDate = orderedTasks[0]?.start.slice(0, 10);
   const lastDate = orderedTasks.at(-1)?.start.slice(0, 10);
+  const exportGraph = async () => {
+    if (!selectedExperiment || experimentTasks.length === 0) return;
+    setExportingGraph(true);
+    setGraphExportMessage("");
+    try {
+      const subtitleByTaskId = Object.fromEntries(
+        experimentTasks.map((task) => {
+          const record =
+            store.records.find((item) => item.id === task.recordId) ||
+            store.records.find((item) => item.taskId === task.id);
+          const protocol = store.protocols.find(
+            (item) => item.id === record?.protocolId,
+          );
+          return [
+            task.id,
+            record
+              ? record.protocolName || protocol?.name || "已有 Record"
+              : "尚无 Record",
+          ];
+        }),
+      );
+      const png = await renderExperimentGraphPng({
+        experiment: selectedExperiment,
+        graph,
+        subtitleByTaskId,
+        dateRange: firstDate
+          ? `${firstDate}${lastDate !== firstDate ? ` — ${lastDate}` : ""}`
+          : undefined,
+      });
+      const destination = await saveExperimentGraphPng(
+        experimentGraphPngFileName(selectedExperiment),
+        png,
+      );
+      if (destination) setGraphExportMessage(`PNG 已保存：${destination}`);
+    } catch (cause) {
+      setGraphExportMessage(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setExportingGraph(false);
+    }
+  };
   return (
     <section className="page experiment-detail">
       <header>
@@ -1715,8 +684,22 @@ function ExperimentsPage({
             </p>
           </div>
         </div>
-        <span className="readonly-badge">只读 Task 网络</span>
+        <div className="experiment-detail-actions">
+          <span className="readonly-badge">只读 Task 网络</span>
+          <button
+            className="secondary"
+            disabled={experimentTasks.length === 0 || exportingGraph}
+            onClick={() => void exportGraph()}
+          >
+            {exportingGraph ? "正在生成…" : "导出 PNG"}
+          </button>
+        </div>
       </header>
+      {graphExportMessage && (
+        <p className="graph-export-message" role="status">
+          {graphExportMessage}
+        </p>
+      )}
       <div className="task-graph-legend" aria-label="Task 状态图例">
         <span>
           <i className="planned" />
@@ -1844,6 +827,7 @@ function ProtocolsPage({
 }) {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Protocol>();
+  const [viewing, setViewing] = useState<Protocol>();
   const [deletingProtocol, setDeletingProtocol] = useState<Protocol>();
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -1902,7 +886,7 @@ function ProtocolsPage({
                 <button onClick={() => setEditing(protocol)}>
                   编辑 Record 正文
                 </button>
-                <button>查看版本 →</button>
+                <button onClick={() => setViewing(protocol)}>查看</button>
                 {protocol.origin === "user" && (
                   <button
                     className="danger"
@@ -1931,6 +915,12 @@ function ProtocolsPage({
           protocol={editing}
           close={() => setEditing(undefined)}
           saved={changed}
+        />
+      )}
+      {viewing && (
+        <ProtocolViewer
+          protocol={viewing}
+          close={() => setViewing(undefined)}
         />
       )}
       {deletingProtocol && (
@@ -1973,6 +963,188 @@ function ProtocolsPage({
         </div>
       )}
     </section>
+  );
+}
+
+const protocolFieldKindLabel: Record<string, string> = {
+  text: "文字",
+  number: "数字",
+  select: "下拉选项",
+  samples: "Sample",
+  plate_layout: "孔板布局",
+  condition_groups: "条件分组",
+};
+
+const protocolOutputModeLabel: Record<string, string> = {
+  one: "产生 1 个新 Sample",
+  count: "产生指定数量的新 Sample",
+  per_input: "每个输入产生 1 个新 Sample",
+  per_input_count: "每个输入产生多个相同条件的 Sample",
+  per_input_conditions: "按实验条件产生多个 Sample",
+  per_input_types: "每个输入产生多种类型的 Sample",
+  same_sample: "原 Sample 继续",
+  plate_or_dish: "按孔板或培养皿分配",
+  plate_wells: "按孔位分配",
+  none: "仅检测，不产生 Sample",
+};
+
+function ProtocolViewer({
+  protocol,
+  close,
+}: {
+  protocol: Protocol;
+  close: () => void;
+}) {
+  const execution = protocol.execution;
+  const templates = Object.entries(protocol.templateVariants || {});
+  return (
+    <div className="overlay centered protocol-view-overlay">
+      <section
+        className="modal protocol-viewer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="protocol-view-title"
+      >
+        <button className="close" aria-label="关闭" onClick={close}>
+          ×
+        </button>
+        <header className="protocol-viewer-header">
+          <div>
+            <p className="eyebrow">CURRENT PROTOCOL</p>
+            <h2 id="protocol-view-title">{protocol.name}</h2>
+            {protocol.description && <p>{protocol.description}</p>}
+          </div>
+          <span>当前启用 v{protocol.version}</span>
+        </header>
+
+        <div className="protocol-viewer-meta">
+          <span>分类：{protocol.category}</span>
+          <span>
+            来源：
+            {protocol.activeVersionOrigin === "user" ||
+            protocol.origin === "user"
+              ? "自定义"
+              : "内置"}
+          </span>
+        </div>
+
+        <section className="protocol-viewer-section">
+          <h3>实验步骤</h3>
+          {protocol.blocks.length ? (
+            <ol>
+              {protocol.blocks.map((block) => (
+                <li key={block}>{block}</li>
+              ))}
+            </ol>
+          ) : (
+            <p className="muted">未设置实验步骤。</p>
+          )}
+        </section>
+
+        <section className="protocol-viewer-section">
+          <h3>Sample Flow</h3>
+          {execution ? (
+            <dl>
+              <div>
+                <dt>输入类型</dt>
+                <dd>{execution.inputTypes?.join("、") || "不限"}</dd>
+              </div>
+              <div>
+                <dt>输入数量</dt>
+                <dd>
+                  {execution.inputCardinality === "many" ? "可多个" : "1 个"}
+                </dd>
+              </div>
+              <div>
+                <dt>完成后</dt>
+                <dd>
+                  {protocolOutputModeLabel[execution.outputMode] ||
+                    execution.outputMode}
+                </dd>
+              </div>
+              <div>
+                <dt>输出类型</dt>
+                <dd>
+                  {execution.outputRules?.length
+                    ? execution.outputRules
+                        .map((rule) => `${rule.sampleType} × ${rule.count}`)
+                        .join("、")
+                    : execution.outputType || "与输入相同 / 不适用"}
+                </dd>
+              </div>
+              <div>
+                <dt>输入 Sample</dt>
+                <dd>
+                  {execution.consumptionPolicy === "consume"
+                    ? "视为已转化或消耗"
+                    : "保留"}
+                </dd>
+              </div>
+              {execution.conditionAllocation?.containerMode && (
+                <div>
+                  <dt>条件分配</dt>
+                  <dd>
+                    {
+                      {
+                        independent: "不绑定容器位置",
+                        plate: "按孔板孔位",
+                        dish: "按培养皿",
+                      }[execution.conditionAllocation.containerMode]
+                    }
+                  </dd>
+                </div>
+              )}
+            </dl>
+          ) : (
+            <p className="muted">未设置 Sample Flow。</p>
+          )}
+        </section>
+
+        <section className="protocol-viewer-section">
+          <h3>Record 字段</h3>
+          {protocol.fields?.length ? (
+            <div className="protocol-viewer-fields">
+              {protocol.fields.map((field) => (
+                <article key={field.key}>
+                  <div>
+                    <b>{field.label}</b>
+                    {field.required && <em>必填</em>}
+                  </div>
+                  <code>{`{{${field.key}}}`}</code>
+                  <small>
+                    {protocolFieldKindLabel[field.kind] || field.kind}
+                    {field.unit ? ` · 单位 ${field.unit}` : ""}
+                    {field.defaultValue
+                      ? ` · 默认值 ${field.defaultValue}`
+                      : ""}
+                  </small>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">未设置自定义字段。</p>
+          )}
+        </section>
+
+        <section className="protocol-viewer-section">
+          <h3>Record 正文</h3>
+          {templates.length ? (
+            <div className="protocol-viewer-templates">
+              {templates.map(([name, body]) => (
+                <article key={name}>
+                  <b>{name}</b>
+                  <pre>{body}</pre>
+                </article>
+              ))}
+            </div>
+          ) : protocol.template ? (
+            <pre>{protocol.template}</pre>
+          ) : (
+            <p className="muted">未设置 Record 正文。</p>
+          )}
+        </section>
+      </section>
+    </div>
   );
 }
 
@@ -2026,9 +1198,18 @@ function RecordsPage({
   const [pdfProgress, setPdfProgress] = useState("");
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfFinishing, setPdfFinishing] = useState(false);
+  const [bundleBusy, setBundleBusy] = useState(false);
+  const [bundleProgress, setBundleProgress] = useState("");
   const [printMode, setPrintMode] = useState(false);
   const pdfController = useRef<AbortController | undefined>(undefined);
-  useEffect(() => () => pdfController.current?.abort(), []);
+  const bundleController = useRef<AbortController | undefined>(undefined);
+  useEffect(
+    () => () => {
+      pdfController.current?.abort();
+      bundleController.current?.abort();
+    },
+    [],
+  );
   const [deleteError, setDeleteError] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -2037,6 +1218,8 @@ function RecordsPage({
   const [bodyError, setBodyError] = useState("");
   const [savingBody, setSavingBody] = useState(false);
   const [insertingImage, setInsertingImage] = useState(false);
+  const [insertingFile, setInsertingFile] = useState(false);
+  const [attachmentMessage, setAttachmentMessage] = useState("");
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const closeRecordView = () => {
     setDeleteError("");
@@ -2047,6 +1230,8 @@ function RecordsPage({
     setBodyError("");
     setSavingBody(false);
     setInsertingImage(false);
+    setInsertingFile(false);
+    setAttachmentMessage("");
     closeRecord();
   };
   const visibleRecords = sortedRecords.filter((item) => {
@@ -2087,13 +1272,14 @@ function RecordsPage({
       });
       setExportPreview({ records: selectedRecords, store, manifest });
       setPdfProgress("");
+      setBundleProgress("");
       setExportError("");
     } catch (reason) {
       setExportError(reason instanceof Error ? reason.message : String(reason));
     }
   };
   const printExport = async () => {
-    if (!exportPreview || printMode || pdfController.current) return;
+    if (!exportPreview || printMode || pdfController.current || bundleBusy) return;
     const imageCount = exportPreview.records.reduce(
       (count, item) =>
         count +
@@ -2136,7 +1322,7 @@ function RecordsPage({
     }
   };
   const lowMemoryExport = async () => {
-    if (!exportPreview || pdfController.current || printMode) return;
+    if (!exportPreview || pdfController.current || printMode || bundleBusy) return;
     const controller = new AbortController();
     pdfController.current = controller;
     setPdfBusy(true);
@@ -2280,6 +1466,130 @@ function RecordsPage({
       setInsertingImage(false);
     }
   };
+  const addFilesToBody = async () => {
+    if (!record) return;
+    try {
+      const sourcePaths = await chooseRecordFiles();
+      if (!sourcePaths.length) return;
+      const files = sourcePaths.map((sourcePath) => ({
+        id: uid("attachment"),
+        sourcePath,
+        label: attachmentLabelFromPath(sourcePath),
+      }));
+      const selection =
+        bodyTextareaRef.current?.selectionStart ?? bodyDraft.length;
+      const inserted = insertFileReferences(
+        bodyDraft,
+        selection,
+        files.map(({ id, label }) => ({ id, label })),
+      );
+      setInsertingFile(true);
+      setBodyError("");
+      await insertRecordFiles({
+        recordId: record.id,
+        files: files.map(({ id, sourcePath }) => ({ id, sourcePath })),
+        renderedContent: inserted.content,
+        changeId: uid("record-change"),
+        createdAt: new Date().toISOString(),
+      });
+      setBodyDraft(inserted.content);
+      changed();
+      requestAnimationFrame(() => {
+        bodyTextareaRef.current?.focus();
+        bodyTextareaRef.current?.setSelectionRange(
+          inserted.cursor,
+          inserted.cursor,
+        );
+      });
+    } catch (reason) {
+      setBodyError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setInsertingFile(false);
+    }
+  };
+  const openAttachment = async (attachment: RecordAttachment) => {
+    if (!record) return;
+    setAttachmentMessage("");
+    try {
+      await openRecordAttachment(record.id, attachment.id);
+    } catch (reason) {
+      setAttachmentMessage(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+  const saveAttachment = async (attachment: RecordAttachment) => {
+    if (!record) return;
+    setAttachmentMessage("");
+    try {
+      const destination = await saveRecordAttachmentAs(record.id, attachment);
+      if (destination) setAttachmentMessage(`附件已保存到：${destination}`);
+    } catch (reason) {
+      setAttachmentMessage(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+  const exportBundle = async () => {
+    if (!exportPreview || bundleController.current || pdfBusy || printMode) return;
+    const controller = new AbortController();
+    bundleController.current = controller;
+    setBundleBusy(true);
+    setBundleProgress("请选择保存位置…");
+    setExportError("");
+    let job: string | undefined;
+    try {
+      job = await beginRecordBundlePdf(exportPreview.records);
+      controller.signal.throwIfAborted();
+      if (!job) {
+        setBundleProgress("");
+        return;
+      }
+      setBundleProgress("正在逐页生成低内存 PDF…");
+      await renderRecordPdf(
+        recordPdfBlocks(
+          exportPreview.records,
+          exportPreview.store,
+          exportPreview.manifest,
+        ),
+        {
+          signal: controller.signal,
+          imageUrl: recordImagePreviewUrl,
+          writePage: (jpeg, sequence) =>
+            appendRecordBundlePdfPage(job!, sequence, jpeg),
+          progress: (pages, images) =>
+            setBundleProgress(`已写入 ${pages} 页 · 已处理 ${images} 张图片`),
+        },
+      );
+      controller.signal.throwIfAborted();
+      setBundleProgress("正在归档 PDF 和附件…");
+      const result = await finishRecordBundlePdf(job);
+      job = undefined;
+      setBundleProgress(
+        `已导出 ${result.recordCount} 条 Record 的低内存 PDF 和 ${result.attachmentCount} 个附件：${result.path}`,
+      );
+      try {
+        await markExportPrintRequested(exportPreview.manifest.id);
+      } catch (reason) {
+        setExportError(`ZIP 已保存，但导出审计状态更新失败：${String(reason)}`);
+      }
+    } catch (reason) {
+      if (controller.signal.aborted)
+        setBundleProgress("导出已取消，未完成文件已清理。");
+      else {
+        setBundleProgress("");
+        setExportError(
+          `ZIP 导出失败：${reason instanceof Error ? reason.message : String(reason)}`,
+        );
+      }
+    } finally {
+      if (job) {
+        try {
+          await cancelRecordBundlePdf(job);
+        } catch {
+          setExportError("ZIP PDF 临时文件清理失败，请重启 LabFlow 后检查保存目录。");
+        }
+      }
+      bundleController.current = undefined;
+      setBundleBusy(false);
+    }
+  };
   return (
     <section className="page">
       <header>
@@ -2413,7 +1723,7 @@ function RecordsPage({
             <button
               className="secondary"
               onClick={() => setExportPreview(undefined)}
-              disabled={pdfBusy || printMode}
+              disabled={pdfBusy || printMode || bundleBusy}
             >
               返回选择
             </button>
@@ -2423,23 +1733,33 @@ function RecordsPage({
             </span>
             <button
               className="secondary"
-              disabled={pdfBusy || printMode}
+              disabled={pdfBusy || printMode || bundleBusy}
               onClick={() => void printExport()}
             >
               打印 / 保存 PDF
             </button>
             <button
               className="primary"
-              disabled={pdfBusy || printMode}
+              disabled={pdfBusy || printMode || bundleBusy}
               onClick={() => void lowMemoryExport()}
             >
               {pdfBusy ? "正在导出…" : "低内存 PDF"}
             </button>
-            {pdfBusy && (
+            <button
+              className="primary"
+              disabled={pdfBusy || printMode || bundleBusy}
+              onClick={() => void exportBundle()}
+            >
+              {bundleBusy ? "正在打包…" : "低内存 PDF＋附件 ZIP"}
+            </button>
+            {(pdfBusy || bundleBusy) && (
               <button
                 className="secondary"
                 disabled={pdfFinishing}
-                onClick={() => pdfController.current?.abort()}
+                onClick={() => {
+                  if (pdfBusy) pdfController.current?.abort();
+                  else bundleController.current?.abort();
+                }}
               >
                 取消
               </button>
@@ -2449,9 +1769,10 @@ function RecordsPage({
             <p>
               大量图片请选择“低内存
               PDF”：逐页保存为图像，文字不可选中复制。需要可复制文字时，可使用系统打印（最多
-              8 张图片）。
+              8 张图片）。“低内存 PDF＋附件 ZIP”会将同一份逐页 PDF 与所选 Records 的全部原始附件放入一个 ZIP。
             </p>
             {pdfProgress && <p>{pdfProgress}</p>}
+            {bundleProgress && <p>{bundleProgress}</p>}
             {exportError && (
               <p className="form-error" role="alert">
                 {exportError}
@@ -2621,6 +1942,9 @@ function RecordsPage({
             {deleteError && (
               <p className="form-error record-delete-error">{deleteError}</p>
             )}
+            {attachmentMessage && (
+              <p className="record-attachment-message">{attachmentMessage}</p>
+            )}
             <div className="record-content">
               <article>
                 <section className="record-section">
@@ -2673,7 +1997,7 @@ function RecordsPage({
                     <div className="record-body-editor">
                       <p className="muted">
                         仅修改此 Record，不影响 Protocol 模板或其他
-                        Record。插入图片会立即保存当前正文。
+                        Record。插入图片或文件会立即保存当前正文。
                       </p>
                       <textarea
                         aria-label="实验正文"
@@ -2684,7 +2008,7 @@ function RecordsPage({
                       <div className="record-image-insert-row">
                         <button
                           className="secondary"
-                          disabled={savingBody || insertingImage}
+                          disabled={savingBody || insertingImage || insertingFile}
                           onClick={() => void addImageToBody()}
                           type="button"
                         >
@@ -2694,11 +2018,26 @@ function RecordsPage({
                           支持 PNG、JPEG、WebP、TIFF；大图会保留原图并生成预览。
                         </small>
                       </div>
+                      <div className="record-image-insert-row">
+                        <button
+                          className="secondary"
+                          disabled={savingBody || insertingImage || insertingFile}
+                          onClick={() => void addFilesToBody()}
+                          type="button"
+                        >
+                          {insertingFile ? "归档文件中…" : "在光标处插入文件"}
+                        </button>
+                        <small>
+                          可一次选择多个任意类型文件；原文件保存在 LabFlow 用户数据目录，不写入 SQLite，也不生成预览。
+                        </small>
+                      </div>
                       <div className="record-body-live-preview">
                         <b>正文预览</b>
                         <RecordBody
                           attachments={record.attachments}
                           content={bodyDraft || "暂无正文。"}
+                          onOpenAttachment={openAttachment}
+                          onSaveAttachment={saveAttachment}
                         />
                       </div>
                       {bodyError && <p className="form-error">{bodyError}</p>}
@@ -2728,6 +2067,8 @@ function RecordsPage({
                       content={
                         record.renderedContent || record.notes || "暂无正文。"
                       }
+                      onOpenAttachment={openAttachment}
+                      onSaveAttachment={saveAttachment}
                     />
                   )}
                 </section>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RecordItem, Sample, Task } from "../src/domain.ts";
 import {
+  eligibleRecordInputSamples,
   eligibleParentTaskOptions,
   groupSamplesBySource,
   sampleSourceInfo,
@@ -51,8 +52,8 @@ test("Sample source groups distinguish direct parent, other Task, and external",
     parentTaskIds: [parent.id],
   };
   const records = [
-    { id: "record-parent", taskId: parent.id },
-    { id: "record-other", taskId: other.id },
+    { id: "record-parent", taskId: parent.id, outputs: ["direct"] },
+    { id: "record-other", taskId: other.id, outputs: ["other"] },
   ] as RecordItem[];
   const samples = [
     { id: "direct", code: "EXP-RNA02", type: "RNA", source: "record-parent" },
@@ -80,5 +81,104 @@ test("Sample source groups distinguish direct parent, other Task, and external",
   assert.deepEqual(
     groups.external.map((sample) => sample.id),
     ["external"],
+  );
+});
+
+test("a Sample passed through by a parent Record is a direct-parent output", () => {
+  const creator = task("creator", "2026-08-24T09:00");
+  const parent = task("parent", "2026-08-25T09:00");
+  const current = {
+    ...task("current", "2026-08-26T09:00"),
+    parentTaskIds: [parent.id],
+  };
+  const records = [
+    {
+      id: "record-creator",
+      taskId: creator.id,
+      outputs: ["continued-sample"],
+    },
+    {
+      id: "record-parent",
+      taskId: parent.id,
+      inputs: ["continued-sample"],
+      outputs: ["continued-sample"],
+    },
+  ] as RecordItem[];
+  const sample = {
+    id: "continued-sample",
+    code: "EXP-CELL01",
+    type: "CELL",
+    source: "record-creator",
+  } as Sample;
+
+  assert.deepEqual(
+    sampleSourceInfo(sample, current, [creator, parent], records),
+    { kind: "direct_parent", sourceTask: parent },
+  );
+});
+
+test("outputs from multiple parent Tasks all belong to the direct-parent group", () => {
+  const parentA = task("parent-a", "2026-08-25T09:00");
+  const parentB = task("parent-b", "2026-08-25T10:00");
+  const current = {
+    ...task("current", "2026-08-26T09:00"),
+    parentTaskIds: [parentA.id, parentB.id],
+  };
+  const records = [
+    { id: "record-a", taskId: parentA.id, outputs: ["sample-a"] },
+    { id: "record-b", taskId: parentB.id, outputs: ["sample-b"] },
+  ] as RecordItem[];
+  const samples = [
+    { id: "sample-a", code: "EXP-RNA01", type: "RNA" },
+    { id: "sample-b", code: "EXP-RNA02", type: "RNA" },
+  ] as Sample[];
+
+  const groups = groupSamplesBySource(
+    samples,
+    current,
+    [parentA, parentB],
+    records,
+  );
+  assert.deepEqual(
+    groups.direct_parent.map((sample) => sample.id),
+    ["sample-a", "sample-b"],
+  );
+  assert.deepEqual(groups.other_task, []);
+});
+
+test("consumed Samples are excluded from Record input candidates", () => {
+  const samples = [
+    {
+      id: "available",
+      experimentId: "exp",
+      code: "EXP-RNA01",
+      type: "rna",
+    },
+    {
+      id: "consumed",
+      experimentId: "exp",
+      code: "EXP-RNA02",
+      type: "RNA",
+      consumed: true,
+    },
+    {
+      id: "wrong-experiment",
+      experimentId: "other",
+      code: "OTHER-RNA01",
+      type: "RNA",
+    },
+    {
+      id: "wrong-type",
+      experimentId: "exp",
+      code: "EXP-CELL01",
+      type: "CELL",
+    },
+  ] as Sample[];
+
+  assert.deepEqual(
+    eligibleRecordInputSamples(samples, "exp", ["RNA"]).map(
+      (sample) => sample.id,
+    ),
+    ["available"],
   );
 });

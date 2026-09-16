@@ -73,6 +73,25 @@ div.task-form {
   color: #be3e50 !important;
   margin: 10px 0 0 !important;
 }
+.record-output-preview {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #ddd8ff;
+  border-radius: 9px;
+  background: #f8f7ff;
+  color: #57516f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.record-output-preview b {
+  color: #51479d;
+  font-size: 12px;
+}
+.record-output-preview small {
+  color: #817b94;
+}
 .task-dependencies {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -199,7 +218,9 @@ div.task-form {
 }
 .condition-group {
   display: grid;
-  grid-template-columns: 24px minmax(130px, 1fr) minmax(100px, 0.75fr) minmax(100px, 0.75fr) 70px 30px;
+  grid-template-columns:
+    24px minmax(125px, 1fr) minmax(95px, 0.7fr) minmax(95px, 0.7fr)
+    minmax(125px, 1fr) 70px 30px;
   gap: 7px;
   align-items: center;
 }
@@ -235,7 +256,7 @@ div.task-form {
   opacity: 0.35;
 }
 .modal:has(.condition-layout) {
-  width: min(900px, calc(100vw - 40px));
+  width: min(1080px, calc(100vw - 40px));
 }
 .protocol-inputs {
   border: 1px solid var(--line);

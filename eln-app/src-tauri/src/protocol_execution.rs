@@ -229,30 +229,6 @@ fn create_external_inputs(
         .collect()
 }
 
-fn validate_required_fields(spec: &Value, values: &Value) -> Result<(), String> {
-    for field in spec
-        .get("fields")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if field
-            .get("required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            let key = field
-                .get("key")
-                .and_then(Value::as_str)
-                .ok_or("Protocol field is missing key")?;
-            if string_value(values, key).is_none() {
-                return Err(format!("Missing required Protocol field: {key}"));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn render_template(spec: &Value, values: &Value, date: &str) -> String {
     let selected_template = spec
         .get("templateSelector")
@@ -377,7 +353,6 @@ pub fn execute_with_external(
     ).map_err(|_| "Protocol not found".to_string())?;
     let spec: Value =
         serde_json::from_str(&schema).map_err(|_| "Protocol schema is invalid".to_string())?;
-    validate_required_fields(&spec, &values)?;
     let execution = spec
         .get("execution")
         .ok_or("Protocol has no execution rule")?;
@@ -426,6 +401,14 @@ pub fn execute_with_external(
         .collect()
     };
     let input = inputs.first().cloned();
+    crate::protocol_schema::validate_values(
+        &spec,
+        &values,
+        &inputs
+            .iter()
+            .map(|(_, kind)| kind.clone())
+            .collect::<Vec<_>>(),
+    )?;
     let input_ids: Vec<String> = inputs.iter().map(|(id, _)| id.clone()).collect();
     let input_type = input.as_ref().map(|(_, kind)| kind.as_str());
     let input_summary = input_ids
@@ -572,6 +555,15 @@ pub fn execute_with_external(
             .and_then(|allocation| allocation.get("plateMapping"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let container_mode = execution
+            .get("conditionAllocation")
+            .and_then(|allocation| allocation.get("containerMode"))
+            .and_then(Value::as_str)
+            .unwrap_or(if plate_mapping {
+                "plate"
+            } else {
+                "independent"
+            });
         let capacity = if plate_mapping {
             Some(
                 string_value(&values, "plate_format")
@@ -581,7 +573,8 @@ pub fn execute_with_external(
         } else {
             None
         };
-        let assignments = crate::plate_layout::parse_condition_groups(raw, capacity)?;
+        let assignments =
+            crate::plate_layout::parse_condition_groups(raw, capacity, container_mode)?;
         rendered = rendered.replace(
             "{{condition_groups_summary}}",
             &crate::plate_layout::condition_summary(&assignments),
@@ -639,6 +632,49 @@ pub fn execute_with_external(
     }
     let mut output_conditions = Vec::new();
     let mut plate_output_assignments = Vec::new();
+    let multi_type_outputs = if output_mode == "per_input_types" {
+        let rules = execution
+            .get("outputRules")
+            .and_then(Value::as_array)
+            .ok_or("Multi-type output requires outputRules")?;
+        let mut outputs = Vec::new();
+        for id in &input_ids {
+            let parent_label: String = tx
+                .query_row(
+                    "SELECT coalesce(display_name,sample_code) FROM samples WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            for rule in rules {
+                let sample_type = rule
+                    .get("sampleType")
+                    .and_then(Value::as_str)
+                    .ok_or("Multi-type output rule requires sampleType")?;
+                let count = rule
+                    .get("count")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| (1..=96).contains(value))
+                    .ok_or("Each multi-type output count must be 1–96")?;
+                for index in 1..=count {
+                    let suffix = if count == 1 {
+                        sample_type.to_string()
+                    } else {
+                        format!("{sample_type} {index}")
+                    };
+                    outputs.push((
+                        sample_type.to_string(),
+                        format!("{parent_label} · {suffix}"),
+                        Some(id.clone()),
+                    ));
+                }
+            }
+        }
+        Some(outputs)
+    } else {
+        None
+    };
     let (output_type, output_labels, output_parents): (&str, Vec<String>, Vec<Option<String>>) =
         match output_mode {
             "one" => (
@@ -737,6 +773,7 @@ pub fn execute_with_external(
                             .plate_position
                             .as_deref()
                             .map(str::to_owned)
+                            .or_else(|| assignment.container_position.clone())
                             .unwrap_or_else(|| {
                                 format!("{} · {}", assignment.condition, assignment.replicate_index)
                             });
@@ -790,9 +827,22 @@ pub fn execute_with_external(
             }
             "same_sample" => ("", Vec::new(), Vec::new()),
             "none" => ("", Vec::new(), Vec::new()),
+            "per_input_types" => ("", Vec::new(), Vec::new()),
             _ => return Err("Unsupported Protocol output mode".into()),
         };
-    if !output_type.is_empty() {
+    let output_specs = multi_type_outputs.unwrap_or_else(|| {
+        output_labels
+            .into_iter()
+            .zip(output_parents)
+            .map(|(label, parent)| (output_type.to_string(), label, parent))
+            .collect::<Vec<_>>()
+    });
+    let output_types = output_specs
+        .iter()
+        .map(|(sample_type, _, _)| sample_type.as_str())
+        .filter(|sample_type| !sample_type.is_empty())
+        .collect::<std::collections::HashSet<_>>();
+    for output_type in output_types {
         let registered: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sample_types WHERE canonical_type=upper(?1) AND archived_at IS NULL)",
@@ -807,10 +857,10 @@ pub fn execute_with_external(
         }
     }
     let mut output_ids = Vec::new();
-    for (index, label) in output_labels.iter().enumerate() {
+    for (index, (output_type, label, parent_id)) in output_specs.iter().enumerate() {
         let id = format!("sample-{record_id}-{index}");
         let code = next_sample_code(&tx, &experiment_id, &experiment_code, output_type)?;
-        let parent_id = output_parents.get(index).and_then(Option::as_deref);
+        let parent_id = parent_id.as_deref();
         let mut metadata = if let Some(parent) = parent_id {
             let inherited: String = tx
                 .query_row(
@@ -836,6 +886,13 @@ pub fn execute_with_external(
             }
             if !assignment.duration.is_empty() {
                 metadata.insert("condition_duration".into(), json!(assignment.duration));
+            }
+            if !assignment.method.is_empty() {
+                metadata.insert("condition_method".into(), json!(assignment.method));
+            }
+            if let Some(position) = &assignment.container_position {
+                metadata.insert("container_position".into(), json!(position));
+                metadata.insert("container_type".into(), json!("DISH"));
             }
             metadata.insert("condition_group".into(), json!(assignment.group_index + 1));
             metadata.insert(
@@ -1036,6 +1093,249 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn copied_builtin_capabilities_execute_equivalently() {
+        // Separate databases keep sample codes and record IDs comparable. Only
+        // the intentionally different Protocol provenance is normalized.
+        let cases = vec![
+            ("pro-cell-thaw", "", json!({"cell_name":"A549"})),
+            (
+                "pro-cell-passage",
+                "CELL",
+                json!({"culture_mode":"贴壁","output_count":"2"}),
+            ),
+            (
+                "pro-cell-passage",
+                "CELL",
+                json!({"culture_mode":"悬浮","output_count":"2"}),
+            ),
+            (
+                "pro-cell-plating",
+                "CELL",
+                json!({"container_type":"孔板","plate_format":"6孔板"}),
+            ),
+            (
+                "pro-cell-plating",
+                "CELL",
+                json!({"container_type":"培养皿"}),
+            ),
+            (
+                "pro-cell-treatment",
+                "PLATE",
+                json!({"treatment_groups":"[{\"factor\":\"TNF\",\"duration\":\"24h\",\"wellCount\":2}]"}),
+            ),
+            (
+                "pro-cell-treatment",
+                "CELL",
+                json!({"treatment_type":"TNF"}),
+            ),
+            (
+                "pro-cell-treatment",
+                "DISH",
+                json!({"treatment_type":"TNF"}),
+            ),
+            (
+                "pro-cell-treatment",
+                "WELL",
+                json!({"treatment_type":"TNF"}),
+            ),
+            (
+                "pro-rna",
+                "CELL",
+                json!({"resuspension_volume":"20","storage":"-80℃ 保存"}),
+            ),
+            (
+                "pro-rt",
+                "RNA",
+                json!({"rna_amount":"1.0","extra_reactions":"2"}),
+            ),
+            ("pro-qpcr", "CDNA", json!({"assay_items":"Actin, GAPDH"})),
+            (
+                "pro-wb",
+                "WELL",
+                json!({"target_proteins":"GAPDH","gel_percentage":"10","primary_antibody":"1:1000","secondary_antibody":"1:5000"}),
+            ),
+            (
+                "pro-supernatant",
+                "WELL",
+                json!({"collection_time":"24h","collection_volume":"500","storage":"-80℃ 保存"}),
+            ),
+            (
+                "pro-elisa",
+                "SUP",
+                json!({"assay_items":"TNF","sample_dilution":"1","reference_wavelength":"570 nm"}),
+            ),
+            (
+                "pro-cck8",
+                "WELL",
+                json!({"assay_items":"Control","assay_mode":"细胞增殖","cell_count":"1000","culture_volume":"100","cck8_volume":"10","incubation_time":"1"}),
+            ),
+        ];
+        for (source, input_type, values) in cases {
+            let mut runs = Vec::new();
+            for copy in [false, true] {
+                let (mut db, path) = database();
+                if input_type.is_empty() {
+                    task(&db, "run");
+                } else {
+                    upstream_samples(
+                        &db,
+                        "run",
+                        &[(
+                            "input-1",
+                            input_type,
+                            r#"{"plate_capacity":6,"group":"baseline"}"#,
+                        )],
+                    );
+                }
+                let protocol_id =
+                    if copy {
+                        crate::protocol_service::save_user_protocol(&mut db, json!({
+                        "id":"copy","name":"Custom copy","description":"Equivalent capability",
+                        "sourceProtocolId":source,"createdAt":"now"
+                    })).unwrap();
+                        "copy"
+                    } else {
+                        source
+                    };
+                let inputs = if input_type.is_empty() {
+                    vec![]
+                } else {
+                    vec!["input-1".into()]
+                };
+                let result = execute(
+                    &mut db,
+                    "run",
+                    protocol_id,
+                    "record",
+                    values.clone(),
+                    inputs,
+                )
+                .unwrap_or_else(|e| panic!("{source} copy={copy}: {e}"));
+                let mut output_state = Vec::new();
+                for id in &result.output_ids {
+                    let (kind, parent, metadata, origin): (String, Option<String>, String, String) = db.query_row(
+                        "SELECT sample_type,parent_sample_id,metadata_json,origin FROM samples WHERE id=?1", [id],
+                        |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+                    let mut metadata: Value = serde_json::from_str(&metadata).unwrap();
+                    metadata
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("source_protocol_id");
+                    metadata
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("source_protocol_version");
+                    let treatments = crate::lineage::derived_treatments(&db, id).unwrap();
+                    output_state.push(json!({"type":kind,"parent":parent,"metadata":metadata,"origin":origin,"treatments":treatments}));
+                }
+                let state: String = db.query_row(
+                    "SELECT json_object(
+                        'eventType',(SELECT event_type FROM process_events WHERE record_id='record'),
+                        'usage',(SELECT json_group_array(usage_type) FROM sample_usages WHERE event_id='event-record'),
+                        'results',(SELECT json_group_array(result_type) FROM results WHERE record_id='record'),
+                        'assayItems',(SELECT count(*) FROM assay_items WHERE record_id='record'),
+                        'relations',(SELECT count(*) FROM sample_relations),
+                        'terminal',(SELECT json_extract(protocol_snapshot_json,'$.schema.terminalAssay') FROM records WHERE id='record')
+                    )", [], |r| r.get(0)).unwrap();
+                runs.push(json!({"inputs":result.input_ids,"outputs":output_state,"body":result.rendered_content,"state":serde_json::from_str::<Value>(&state).unwrap()}));
+                drop(db);
+                fs::remove_file(path).unwrap();
+            }
+            assert_eq!(
+                runs[0], runs[1],
+                "Capability parity failed for {source} with {input_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn capability_version_switch_executes_new_rules_and_preserves_saved_record() {
+        let (mut db, path) = database();
+        upstream_samples(
+            &db,
+            "rna",
+            &[
+                ("cell-1", "CELL", "{}"),
+                ("plate-2", "PLATE", r#"{"plate_capacity":6}"#),
+            ],
+        );
+        crate::protocol_service::save_user_protocol(&mut db, json!({"id":"custom","name":"Custom","description":"Test","sourceProtocolId":"pro-rna","createdAt":"now"})).unwrap();
+        execute(
+            &mut db,
+            "rna",
+            "custom",
+            "r-old",
+            json!({"resuspension_volume":"20","storage":"-80℃ 保存"}),
+            vec!["cell-1".into()],
+        )
+        .unwrap();
+        let old: (String, String) = db
+            .query_row(
+                "SELECT protocol_snapshot_json,current_data_json FROM records WHERE id='r-old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        crate::protocol_service::save_protocol_template_version(&mut db, json!({"protocolId":"custom","sourceProtocolId":"pro-cell-treatment","createdAt":"later"})).unwrap();
+        task(&db, "stimulate");
+        let output = execute(&mut db, "stimulate", "custom", "r-new", json!({"treatment_groups":"[{\"factor\":\"TNF\",\"duration\":\"24h\",\"wellCount\":2}]"}), vec!["plate-2".into()]).unwrap();
+        assert_eq!(output.output_ids.len(), 2);
+        assert_eq!(
+            crate::lineage::derived_treatments(&db, &output.output_ids[0])
+                .unwrap()
+                .len(),
+            1
+        );
+        let still_old: (String, String) = db
+            .query_row(
+                "SELECT protocol_snapshot_json,current_data_json FROM records WHERE id='r-old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(old, still_old);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_custom_field_values_roll_back_record_and_outputs() {
+        let (mut db, path) = database();
+        task(&db, "run");
+        crate::protocol_service::save_user_protocol(&mut db, json!({
+            "id":"custom","name":"Custom","description":"Test","sourceProtocolId":"pro-cell-thaw","createdAt":"now",
+            "fields":[{"key":"cell_name","label":"Cell","kind":"text","required":true},{"key":"dose","label":"Dose","kind":"number","required":true,"min":0,"max":10}],
+            "template":"{{cell_name}} {{dose}}"
+        })).unwrap();
+        for dose in ["NaN", "11", ""] {
+            assert!(execute(
+                &mut db,
+                "run",
+                "custom",
+                "r-invalid",
+                json!({"cell_name":"A549","dose":dose}),
+                vec![]
+            )
+            .is_err());
+            let remaining: i64 = db.query_row("SELECT (SELECT count(*) FROM records)+(SELECT count(*) FROM samples)+(SELECT count(*) FROM process_events)",[],|r|r.get(0)).unwrap();
+            assert_eq!(remaining, 0);
+        }
+        let valid = execute(
+            &mut db,
+            "run",
+            "custom",
+            "r-valid",
+            json!({"cell_name":"A549","dose":"2.5"}),
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(valid.output_ids.len(), 1);
+        assert_eq!(valid.rendered_content, "A549 2.5");
+        drop(db);
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1954,6 +2254,83 @@ mod tests {
             )
             .unwrap();
         assert_eq!(consumed, 1);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn multi_type_flow_creates_each_rule_for_every_input_with_exact_lineage() {
+        let (mut db, path) = database();
+        upstream_samples(
+            &db,
+            "multi-harvest-task",
+            &[("cell-a", "CELL", "{}"), ("cell-b", "CELL", "{}")],
+        );
+        db.execute("INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES ('multi-harvest','Multi harvest','自定义',1,'#000','','user')", []).unwrap();
+        db.execute(
+            "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES ('multi-harvest',1,?1,'user','now')",
+            [json!({
+                "schemaVersion":1,
+                "fields":[],
+                "template":"输入：{{input_sample_summary}}\n输出：{{output_sample_summary}}",
+                "execution":{
+                    "engine":"sample_flow_v1","eventType":"custom:multi-harvest",
+                    "inputSource":"experiment_samples","inputCardinality":"many",
+                    "inputTypes":["CELL"],"inputTypePolicy":"uniform",
+                    "outputMode":"per_input_types","consumptionPolicy":"non_destructive",
+                    "outputRules":[
+                        {"sampleType":"SUP","count":1},
+                        {"sampleType":"RNA","count":1},
+                        {"sampleType":"PROTEIN","count":2}
+                    ]
+                }
+            }).to_string()],
+        ).unwrap();
+
+        let result = execute(
+            &mut db,
+            "multi-harvest-task",
+            "multi-harvest",
+            "multi-harvest-record",
+            json!({}),
+            vec!["cell-a".into(), "cell-b".into()],
+        )
+        .unwrap();
+
+        assert_eq!(result.output_ids.len(), 8);
+        let counts: (i64, i64, i64) = db
+            .query_row(
+                "SELECT
+                   sum(sample_type='SUP'),
+                   sum(sample_type='RNA'),
+                   sum(sample_type='PROTEIN')
+                 FROM samples WHERE source_record_id='multi-harvest-record'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(counts, (2, 2, 4));
+        for parent in ["cell-a", "cell-b"] {
+            let child_count: i64 = db
+                .query_row(
+                    "SELECT count(*) FROM samples WHERE source_record_id='multi-harvest-record' AND parent_sample_id=?1",
+                    [parent],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(child_count, 4);
+        }
+        let usages: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sample_usages WHERE event_id='event-multi-harvest-record' AND usage_type='non_destructive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(usages, 2);
+        assert!(result.rendered_content.contains("EXP900-SUP"));
+        assert!(result.rendered_content.contains("EXP900-RNA"));
+        assert!(result.rendered_content.contains("EXP900-PROTEIN"));
         drop(db);
         fs::remove_file(path).unwrap();
     }

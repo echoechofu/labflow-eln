@@ -51,7 +51,17 @@ export function* recordPdfBlocks(
       record.renderedContent || record.notes || "暂无正文。",
     )) {
       if (segment.type === "text") yield text(segment.text);
-      else {
+      else if (segment.type === "file") {
+        const attachment = record.attachments?.find(
+          (item) => item.id === segment.attachmentId,
+        );
+        yield text(
+          attachment
+            ? `附件：${attachment.fileName}${attachment.size === undefined ? "" : ` · ${attachment.size} bytes`}`
+            : `附件缺失：${segment.label || segment.attachmentId}`,
+          18,
+        );
+      } else {
         const attachment = record.attachments?.find(
           (item) => item.id === segment.attachmentId,
         );

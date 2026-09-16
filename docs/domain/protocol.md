@@ -1,5 +1,21 @@
 # Protocol
 
+## 共享能力与字段编辑（2026-09-12）
+
+创建向导现在提供两条路径：从头配置基础 Sample Flow，或从任意已有 Protocol 的活跃版本创建。后者由共享 `protocol_service` 根据 `sourceProtocolId` 读取并复制 schema；保留来源的 execution、事件类型、metadata 规则、模板变体、Result 和 Terminal Assay 配置。因此 11 个内置 Protocol 的现有执行能力均可成为用户 Protocol 的能力来源，不需要按用户 Protocol ID 增加专用执行分支。
+
+这属于受限能力复用，并非开放任意 execution JSON 或任意组合所有执行规则。铺板、刺激等既有能力内部仍保留已验证的执行分支；未新增手动选孔、ELISA/CCK-8 计算算法或用户脚本执行。
+
+用户可以添加文本、数字和下拉字段，配置标签、必填、默认值、单位、数字范围及基于其他字段值的显隐条件。创建 Record 时由 `ProtocolFields` 渲染，布局交给 `ProtocolLayoutEditors`，状态与提交仍由 `RecordCreationDrawer` 负责。普通字段渲染与样本来源分组分离。
+
+保存 schema 时，共享 `protocol_schema` 校验字段 key、类型、重复键、数字范围和默认值、下拉选项、显隐引用及模板占位符；执行 Record 时按实际输入类型和值检查可见字段、必填项、有限数字和选项合法性。旧 schema 中未声明选项的 select 保留原执行器的专门校验，新建 schema 必须提供选项。
+
+来源能力字段使用服务端 `protectedFieldKeys` 保留其 key、kind、选项、必填和显隐语义，标签与有效默认值可修改；附加普通字段可增删。基础创建的 fields 是附加字段，与系统生成的数量/布局字段合并；来源复制及版本更新的 fields 是完整字段列表。Desktop 与 MCP 都调用同一 service，客户端不能提交 execution 覆盖来源能力。
+
+版本编辑支持字段和正文修改，也可选另一个能力来源。切换来源后新版本使用新来源的事件类型与执行配置；旧 version、Record snapshot、已发生的 ProcessEvent 和渲染正文保持不变。复制所得用户 Protocol 不依赖来源 Protocol 后续存在。
+
+验收通过 11 个内置的 16 个执行对照场景，比较输入输出、正文、metadata、usage、Result、检测项目及刺激历史；另覆盖来源版本切换的实际执行、历史 Record 不变与非法字段值整体回滚。尚未完成新安装包或全平台桌面发布验收。
+
 ## 当前模型
 
 Protocol 由 `protocols` 与 `protocol_versions` 表表达。Protocol 和 version 都区分 `builtin` / `user` 来源；活跃版本包含 JSON schema，当前使用的字段包括：
@@ -11,13 +27,16 @@ Protocol 由 `protocols` 与 `protocol_versions` 表表达。Protocol 和 versio
 
 内置 catalog 当前有 11 个 Protocol：细胞复苏、细胞传代、细胞铺板、细胞加刺激、RNA Extraction — Trizol、Reverse Transcription — PrimeScript、SYBR Green qPCR、Western Blot、培养上清收集、ELISA — 细胞因子、CCK-8 细胞增殖/毒性实验。ELISA 与 CCK-8 的实验正文来自仓库根目录的 `组内protocol整理_Ver1.0.doc`。
 
-用户可通过三步向导创建 Protocol v1：基本信息、Sample Flow、Record Template。当前用户定义范围是单一输入类型和以下输出语义：
+从头创建路径可通过三步向导创建 Protocol v1：基本信息、Sample Flow、正文与字段。其基础范围是单一输入类型和以下输出语义；需要其他内置能力时使用上述来源复制路径：
 
 - 原 Sample 继续（`same_sample`）；
 - 每个输入派生一个新 Sample（`per_input`）；
 - 每个输入按 Record 启动时填写的数量派生多个 Sample（`per_input_count`）；
 - 每个输入按条件组派生多个 Sample（`per_input_conditions`），可选将输出顺序映射到孔板位置；
+- 每个输入按固定输出规则同时派生多种 Sample 类型（`per_input_types`），每种类型可配置数量；
 - 仅检测、不产生 Sample（`none`）。
+
+多类型输出规则保存在 execution 的 `outputRules` 中，例如 SUP × 1、RNA × 1、PROTEIN × 1。规则会分别应用到每个输入 Sample，每个输出都直接记录对应输入为 parent，并在同一个 Record 事务内创建。每个 Protocol 支持 2–16 种不重复的输出类型，每种数量为 1–96，每个输入的输出总数不超过 96。输入 Sample 是否保留或消耗继续使用现有 `consumptionPolicy`，不由输出类型自动决定。
 
 条件分配与 Sample 类型相互独立。创建者可将输出定义为任何已注册或同时注册的类型（例如 `CELL`、`PLATE`、`DISH`）；启用孔板映射时，位置写入输出 Sample 的 `plate_position` metadata，并不会把 Sample 类型强制改成 `WELL`。同一套条件组会分别应用到每个输入 Sample。
 
@@ -38,7 +57,7 @@ qPCR、ELISA、CCK-8 的 schema 还包含当前已实现的 `terminalAssay` 描�
 - `one`、`count`、`plate_or_dish`、`plate_wells` 等内置输出模式；
 - `cDNA` 的显示后缀与 Sample 类型大写规范化。
 
-因此，当前能力是“受限 Sample Flow Protocol 创建器”，不是任意 Protocol 上传器。用户 Protocol 已支持按条件生成多个 Sample 和可选的顺序孔位映射；可视化手动选孔、终末检测、专属计算和其他复杂字段仍需已实现的内置 schema/执行器支持。
+因此，基础路径是“受限 Sample Flow Protocol 创建器”；来源路径可复用已有终末检测及 qPCR 专属分析配置。两者都不是任意 Protocol 上传器。可视化手动选孔与未实现的分析算法仍不可配置。
 
 ## Protocol 与历史 Record
 
@@ -51,5 +70,5 @@ Protocol 的活跃版本可在启动时随内置 catalog 升级；新的 schema 
 ## Future design constraints（尚未实现）
 
 - Word/PDF/结构化文件上传导入尚未实现。
-- 用户为自定义 Protocol 增加任意动态 Record 字段、图形化手动选孔和终末检测能力尚未实现。
+- 图形化手动选孔、任意执行规则组合尚未实现。普通字段已可编辑；终末检测通过已有来源配置复用。
 - 若扩展通用 schema/导入器，应保持既有 Record snapshot、用户版本和 lineage 数据可读。

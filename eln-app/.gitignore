@@ -12,10 +12,13 @@ dist
 dist-ssr
 *.local
 src-tauri/target/
+local-build/
+release/
 data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.labflow-backup
 files/
 
 # Editor directories and files

@@ -1,3 +1,4 @@
+use percent_encoding::percent_decode_str;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -14,8 +15,10 @@ mod pdf_export;
 mod plate_layout;
 mod protocol_catalog;
 mod protocol_execution;
+mod protocol_schema;
 pub mod protocol_service;
 pub mod record_attachment_service;
+mod record_bundle;
 pub mod record_service;
 mod task_graph;
 pub mod task_service;
@@ -25,6 +28,13 @@ mod workspace_backup;
 struct DatabaseState(Mutex<Connection>);
 #[derive(Default)]
 struct PdfExportState(Mutex<Option<pdf_export::PdfExport>>);
+struct RecordBundlePdfExport {
+    pdf: pdf_export::PdfExport,
+    destination: PathBuf,
+    record_ids: Vec<String>,
+}
+#[derive(Default)]
+struct RecordBundlePdfExportState(Mutex<Option<RecordBundlePdfExport>>);
 
 #[tauri::command(async)]
 fn begin_record_pdf(state: State<PdfExportState>, destination: String) -> Result<String, String> {
@@ -81,6 +91,146 @@ fn cancel_record_pdf(state: State<PdfExportState>, id: String) -> Result<(), Str
         active.take().unwrap().cancel()?;
     }
     Ok(())
+}
+
+#[tauri::command(async)]
+fn begin_record_bundle_pdf(
+    state: State<RecordBundlePdfExportState>,
+    destination: String,
+    record_ids: Vec<String>,
+) -> Result<String, String> {
+    if record_ids.is_empty() {
+        return Err("请至少选择一条实验记录".into());
+    }
+    let destination = PathBuf::from(destination);
+    if !destination.is_absolute()
+        || destination
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+            != Some("zip")
+    {
+        return Err("请选择绝对路径的 .zip 文件".into());
+    }
+    let parent = destination.parent().ok_or("ZIP 保存位置无效")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let pdf_destination = parent.join(format!(".labflow-merged-{}.pdf", uuid::Uuid::new_v4()));
+    let pdf = pdf_export::PdfExport::begin(&pdf_destination)?;
+    let id = pdf.id.clone();
+    let mut active = state.0.lock().map_err(|_| "ZIP PDF lock poisoned")?;
+    if active.is_some() {
+        return Err("已有 ZIP 导出正在进行，请先完成或取消".into());
+    }
+    *active = Some(RecordBundlePdfExport {
+        pdf,
+        destination,
+        record_ids,
+    });
+    Ok(id)
+}
+
+#[tauri::command(async)]
+fn append_record_bundle_pdf_page(
+    state: State<RecordBundlePdfExportState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let id = request
+        .headers()
+        .get("x-labflow-job")
+        .and_then(|s| s.to_str().ok())
+        .ok_or("缺少 ZIP PDF 会话")?;
+    let sequence: usize = request
+        .headers()
+        .get("x-labflow-page")
+        .and_then(|s| s.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .ok_or("缺少 PDF 页码")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("PDF 页必须使用二进制传输".into());
+    };
+    let mut active = state.0.lock().map_err(|_| "ZIP PDF lock poisoned")?;
+    let job = active
+        .as_mut()
+        .filter(|job| job.pdf.id == id)
+        .ok_or("ZIP PDF 会话不存在")?;
+    job.pdf.append(sequence, bytes)
+}
+
+#[tauri::command(async)]
+fn finish_record_bundle_pdf(
+    app: AppHandle,
+    state: State<RecordBundlePdfExportState>,
+    database: State<DatabaseState>,
+    id: String,
+) -> Result<record_bundle::RecordBundleResult, String> {
+    let job = {
+        let mut active = state.0.lock().map_err(|_| "ZIP PDF lock poisoned")?;
+        if active.as_ref().map(|job| &job.pdf.id) != Some(&id) {
+            return Err("ZIP PDF 会话不存在".into());
+        }
+        active.take().unwrap()
+    };
+    let pdf_path = job.pdf.finish()?;
+    let result = (|| {
+        let connection = database
+            .0
+            .lock()
+            .map_err(|_| "Database lock poisoned".to_string())?;
+        record_bundle::export_records_bundle(
+            &connection,
+            &app_data_dir(&app)?,
+            &job.record_ids,
+            Path::new(&pdf_path),
+            &job.destination,
+        )
+        .map_err(|error| error.to_string())
+    })();
+    let _ = fs::remove_file(&pdf_path);
+    result
+}
+
+#[tauri::command(async)]
+fn cancel_record_bundle_pdf(
+    state: State<RecordBundlePdfExportState>,
+    id: String,
+) -> Result<(), String> {
+    let mut active = state.0.lock().map_err(|_| "ZIP PDF lock poisoned")?;
+    if active.as_ref().map(|job| &job.pdf.id) == Some(&id) {
+        active.take().unwrap().pdf.cancel()?;
+    }
+    Ok(())
+}
+
+#[tauri::command(async)]
+fn save_experiment_graph_png(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    const MAX_PNG_BYTES: usize = 32 * 1024 * 1024;
+    let encoded_destination = request
+        .headers()
+        .get("x-labflow-destination")
+        .and_then(|value| value.to_str().ok())
+        .ok_or("缺少 PNG 保存位置")?;
+    let destination = percent_decode_str(encoded_destination)
+        .decode_utf8()
+        .map_err(|_| "PNG 保存位置编码无效")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("PNG 必须使用二进制传输".into());
+    };
+    if bytes.len() > MAX_PNG_BYTES || !bytes.starts_with(PNG_SIGNATURE) {
+        return Err("导出的 PNG 数据无效或超过 32 MiB".into());
+    }
+    let path = PathBuf::from(destination.as_ref());
+    if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        != Some("png".into())
+    {
+        return Err("导出文件必须使用 .png 扩展名".into());
+    }
+    fs::write(&path, bytes).map_err(|error| format!("保存 PNG 失败：{error}"))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Canonical user-data root. `data_dir()` supplies the OS base directory; the
@@ -717,7 +867,7 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
     }
     let mut protocols = Vec::new();
     let mut statement = connection.prepare("SELECT p.id, p.name, p.category, p.active_version, p.accent, pv.schema_json, p.description, p.origin, pv.origin FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| { let schema: String = row.get(5)?; let spec: Value = serde_json::from_str::<Value>(&schema).unwrap_or(json!({"blocks":[]})); Ok(json!({"id":row.get::<_,String>(0)? ,"name":row.get::<_,String>(1)? ,"category":row.get::<_,String>(2)? ,"version":row.get::<_,i64>(3)? ,"accent":row.get::<_,String>(4)? ,"description":row.get::<_,String>(6)?,"origin":row.get::<_,String>(7)?,"activeVersionOrigin":row.get::<_,String>(8)?,"blocks":spec["blocks"],"fields":spec["fields"],"template":spec["template"],"templateSelector":spec["templateSelector"],"templateVariants":spec["templateVariants"],"execution":spec["execution"],"terminalAssay":spec["terminalAssay"]})) }).map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| { let schema: String = row.get(5)?; let spec: Value = serde_json::from_str::<Value>(&schema).unwrap_or(json!({"blocks":[]})); Ok(json!({"id":row.get::<_,String>(0)? ,"name":row.get::<_,String>(1)? ,"category":row.get::<_,String>(2)? ,"version":row.get::<_,i64>(3)? ,"accent":row.get::<_,String>(4)? ,"description":row.get::<_,String>(6)?,"origin":row.get::<_,String>(7)?,"activeVersionOrigin":row.get::<_,String>(8)?,"blocks":spec["blocks"],"fields":spec["fields"],"protectedFieldKeys":spec["protectedFieldKeys"],"template":spec["template"],"templateSelector":spec["templateSelector"],"templateVariants":spec["templateVariants"],"execution":spec["execution"],"terminalAssay":spec["terminalAssay"]})) }).map_err(|e| e.to_string())?;
     for row in rows {
         protocols.push(row.map_err(|e| e.to_string())?)
     }
@@ -1132,6 +1282,66 @@ fn insert_record_image(
         &mut connection,
         &attachments_dir(&app)?,
         &request,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn insert_record_files(
+    app: AppHandle,
+    state: State<DatabaseState>,
+    request: record_attachment_service::InsertRecordFilesRequest,
+) -> Result<Vec<record_service::RecordAttachment>, String> {
+    let mut connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    record_attachment_service::insert_record_files(
+        &mut connection,
+        &attachments_dir(&app)?,
+        &request,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_record_attachment(
+    app: AppHandle,
+    state: State<DatabaseState>,
+    record_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    let connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    record_attachment_service::open_record_attachment(
+        &connection,
+        &app_data_dir(&app)?,
+        &record_id,
+        &attachment_id,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_record_attachment_as(
+    app: AppHandle,
+    state: State<DatabaseState>,
+    record_id: String,
+    attachment_id: String,
+    destination: String,
+) -> Result<(), String> {
+    let connection = state
+        .0
+        .lock()
+        .map_err(|_| "Database lock poisoned".to_string())?;
+    record_attachment_service::save_record_attachment_as(
+        &connection,
+        &app_data_dir(&app)?,
+        &record_id,
+        &attachment_id,
+        Path::new(&destination),
     )
     .map_err(|error| error.to_string())
 }
@@ -2013,6 +2223,7 @@ pub fn run() {
                 initialize_database(app.handle()).map_err(|error| error.to_string())?;
             app.manage(DatabaseState(Mutex::new(connection)));
             app.manage(PdfExportState::default());
+            app.manage(RecordBundlePdfExportState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2023,6 +2234,13 @@ pub fn run() {
             delete_record,
             update_record_body,
             insert_record_image,
+            insert_record_files,
+            open_record_attachment,
+            save_record_attachment_as,
+            begin_record_bundle_pdf,
+            append_record_bundle_pdf_page,
+            finish_record_bundle_pdf,
+            cancel_record_bundle_pdf,
             update_task_status,
             save_user_protocol,
             save_protocol_template_version,
@@ -2045,6 +2263,7 @@ pub fn run() {
             append_record_pdf_page,
             finish_record_pdf,
             cancel_record_pdf,
+            save_experiment_graph_png,
             create_process_event,
             apply_treatment_event,
             create_treatment_definition,

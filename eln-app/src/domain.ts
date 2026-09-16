@@ -34,6 +34,9 @@ export interface ProtocolField {
   visibleWhen?: { key: string; value: string };
   visibleForInputTypes?: string[];
   defaultValue?: string;
+  unit?: string;
+  min?: number;
+  max?: number;
 }
 export interface ProtocolExecution {
   engine?: "sample_flow_v1";
@@ -43,12 +46,14 @@ export interface ProtocolExecution {
   inputCardinality?: "one" | "many";
   inputTypePolicy?: "uniform" | "mixed";
   outputType?: string;
+  outputRules?: ProtocolOutputRule[];
   outputMode:
     | "one"
     | "count"
     | "per_input"
     | "per_input_count"
     | "per_input_conditions"
+    | "per_input_types"
     | "same_sample"
     | "plate_or_dish"
     | "plate_wells"
@@ -57,7 +62,12 @@ export interface ProtocolExecution {
   consumptionPolicy?: "consume" | "non_destructive" | "aliquot";
   conditionAllocation?: {
     plateMapping?: boolean;
+    containerMode?: "independent" | "plate" | "dish";
   };
+}
+export interface ProtocolOutputRule {
+  sampleType: string;
+  count: number;
 }
 export interface TerminalAssayDefinition {
   itemLabel: string;
@@ -76,6 +86,7 @@ export interface Protocol {
   origin?: "builtin" | "user";
   activeVersionOrigin?: "builtin" | "user";
   fields?: ProtocolField[];
+  protectedFieldKeys?: string[];
   template?: string;
   templateSelector?: string;
   templateVariants?: Record<string, string>;

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Task } from "../src/domain.ts";
 import { buildTaskGraph } from "../src/taskGraph.ts";
+import {
+  experimentGraphCanvasSize,
+  experimentGraphPngFileName,
+} from "../src/experimentGraphPng.ts";
 
 const task = (id: string, parentTaskIds: string[] = []): Task => ({
   id,
@@ -44,4 +48,28 @@ test("task graph ignores invalid relations and safely surfaces cycles", () => {
   assert.equal(cyclic.hasCycle, true);
   assert.equal(cyclic.nodes.length, 2);
   assert.equal(cyclic.edges.length, 2);
+});
+
+test("Experiment graph PNG uses a safe file name and bounded canvas", () => {
+  assert.equal(
+    experimentGraphPngFileName({
+      id: "exp",
+      code: "EXP/01:*",
+      title: "测试",
+      description: "",
+      color: "#6957e8",
+    }),
+    "LabFlow-EXP-01--Task-Network.png",
+  );
+  const size = experimentGraphCanvasSize({
+    nodes: [],
+    edges: [],
+    width: 20_000,
+    height: 10_000,
+    hasCycle: false,
+    invalidRelationCount: 0,
+  });
+  assert.ok(size.pixelWidth <= 8192);
+  assert.ok(size.pixelHeight <= 8192);
+  assert.ok(size.pixelWidth * size.pixelHeight <= 16_000_000);
 });

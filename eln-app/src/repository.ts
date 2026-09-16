@@ -13,6 +13,7 @@ import type {
   Sample,
   SampleTypeDefinition,
   Task,
+  ProtocolField,
 } from "./domain";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -87,6 +88,24 @@ export async function restoreWorkspaceBackup(path: string) {
   return invoke<WorkspaceBackupRestore>("restore_workspace_backup", {
     path,
     importedAt: new Date().toISOString(),
+  });
+}
+
+export async function saveExperimentGraphPng(
+  suggestedFileName: string,
+  png: Uint8Array,
+) {
+  desktopOnly();
+  const destination = await save({
+    title: "导出 Experiment Task 网络图",
+    defaultPath: suggestedFileName,
+    filters: [{ name: "PNG 图片", extensions: ["png"] }],
+  });
+  if (!destination) return undefined;
+  return invoke<string>("save_experiment_graph_png", png, {
+    headers: {
+      "x-labflow-destination": encodeURIComponent(destination),
+    },
   });
 }
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -293,6 +312,86 @@ export async function insertRecordImage(request: {
   desktopOnly();
   return invoke<RecordAttachment>("insert_record_image", { request });
 }
+export async function chooseRecordFiles() {
+  desktopOnly();
+  const selected = await open({
+    title: "选择要插入实验记录的附件",
+    multiple: true,
+    directory: false,
+  });
+  if (!selected) return [];
+  return Array.isArray(selected) ? selected : [selected];
+}
+export async function insertRecordFiles(request: {
+  recordId: string;
+  files: { id: string; sourcePath: string }[];
+  renderedContent: string;
+  changeId: string;
+  createdAt: string;
+}) {
+  desktopOnly();
+  return invoke<RecordAttachment[]>("insert_record_files", { request });
+}
+export async function openRecordAttachment(
+  recordId: string,
+  attachmentId: string,
+) {
+  desktopOnly();
+  await invoke("open_record_attachment", { recordId, attachmentId });
+}
+export async function saveRecordAttachmentAs(
+  recordId: string,
+  attachment: RecordAttachment,
+) {
+  desktopOnly();
+  const destination = await save({
+    title: "另存附件",
+    defaultPath: attachment.fileName,
+  });
+  if (!destination) return undefined;
+  await invoke("save_record_attachment_as", {
+    recordId,
+    attachmentId: attachment.id,
+    destination,
+  });
+  return destination;
+}
+export interface RecordBundleExport {
+  path: string;
+  recordCount: number;
+  attachmentCount: number;
+}
+export async function beginRecordBundlePdf(records: RecordItem[]) {
+  desktopOnly();
+  if (!records.length) throw new Error("请至少选择一条实验记录。");
+  const firstDate = records[0].updated.slice(0, 10) || "Records";
+  const lastDate = records.at(-1)?.updated.slice(0, 10) || firstDate;
+  const destination = await save({
+    title: "合并导出 Records 与附件 ZIP",
+    defaultPath: `LabFlow-Records-${firstDate}${lastDate === firstDate ? "" : `-${lastDate}`}.zip`,
+    filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }],
+  });
+  if (!destination) return undefined;
+  return invoke<string>("begin_record_bundle_pdf", {
+    recordIds: records.map((record) => record.id),
+    destination: destination.toLowerCase().endsWith(".zip")
+      ? destination
+      : `${destination}.zip`,
+  });
+}
+export async function appendRecordBundlePdfPage(
+  id: string,
+  page: number,
+  jpeg: Uint8Array,
+) {
+  await invoke("append_record_bundle_pdf_page", jpeg, {
+    headers: { "x-labflow-job": id, "x-labflow-page": String(page) },
+  });
+}
+export const finishRecordBundlePdf = (id: string) =>
+  invoke<RecordBundleExport>("finish_record_bundle_pdf", { id });
+export const cancelRecordBundlePdf = (id: string) =>
+  invoke<void>("cancel_record_bundle_pdf", { id });
 export function recordImagePreviewUrl(attachmentId: string) {
   if (!isTauri()) return "";
   const path = `/${encodeURIComponent(attachmentId)}`;
@@ -335,16 +434,29 @@ export interface UserProtocolDraft {
   description: string;
   category: string;
   accent: string;
-  inputType: string;
-  inputTypeDisplayName: string;
-  outputBehavior:
-    "same_sample" | "derived_one" | "derived_multiple" | "measurement_only";
+  sourceProtocolId?: string;
+  fields?: ProtocolField[];
+  inputType?: string;
+  inputTypeDisplayName?: string;
+  outputBehavior?:
+    | "same_sample"
+    | "derived_one"
+    | "derived_multiple"
+    | "derived_multi_type"
+    | "measurement_only";
   multipleSampleMode?: "identical" | "condition_groups";
   plateMapping?: boolean;
+  conditionContainer?: "independent" | "plate" | "dish";
   outputType?: string;
   outputTypeDisplayName?: string;
-  consumptionPolicy: "retain" | "consume";
-  template: string;
+  outputRules?: {
+    outputType: string;
+    outputTypeDisplayName: string;
+    count: number;
+  }[];
+  consumptionPolicy?: "retain" | "consume";
+  template?: string;
+  templateVariants?: Record<string, string>;
   createdAt: string;
 }
 
@@ -357,6 +469,8 @@ export async function saveUserProtocol(request: UserProtocolDraft) {
 
 export async function saveProtocolTemplateVersion(request: {
   protocolId: string;
+  sourceProtocolId?: string;
+  fields?: ProtocolField[];
   template?: string;
   templateVariants?: Record<string, string>;
   createdAt: string;

@@ -25,7 +25,7 @@ LabFlow is a local-first laboratory experiment management system and electronic 
 
 - **实验计划 / Experiment planning**：用周日历安排和调整实验 Task，表达实验之间的前后依赖。
 - **Protocol management**：保存内置或自建实验方法；每次执行都冻结版本快照，历史 Record 不会被后续模板修改。
-- **Electronic lab records**：记录本次实验的真实操作、偏差和观察结果，并在正文中插入 WB、显微镜或其他实验图片。
+- **Electronic lab records**：记录本次实验的真实操作、偏差和观察结果，并在正文中插入实验图片或附加任意类型原始文件。
 - **Sample tracking and lineage**：保存输入、输出、消耗、派生、条件分组和孔板位置，支持追踪 Sample 来源。
 - **Local data ownership**：SQLite 数据库、图片原件和预览均保存在用户本机，可导出完整工作区备份。
 - **macOS and Windows**：提供 Apple Silicon macOS 与 Windows 10/11 x64 桌面安装包。
@@ -41,7 +41,7 @@ LabFlow is a local-first laboratory experiment management system and electronic 
 | Sample flow | CELL、PLATE、DISH、WELL、RNA、cDNA、PROTEIN、SUP 及自定义 Sample 类型 |
 | Plate conditions | 条件分配可选映射孔板位置；Sample 类型与孔位互不绑定 |
 | Terminal assays | qPCR、ELISA、CCK-8 的 Plate Mapping 与 Raw Data 保存骨架 |
-| Export and backup | 系统打印、低内存 PDF，以及包含 SQLite 与附件的完整工作区备份 |
+| Export and backup | 系统打印、低内存 PDF、低内存 PDF＋全部附件 ZIP，以及完整工作区备份 |
 
 ## Built-in biomedical protocols
 

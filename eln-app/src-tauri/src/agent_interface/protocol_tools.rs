@@ -46,7 +46,16 @@ pub enum ProtocolOutputBehavior {
     SameSample,
     DerivedOne,
     DerivedMultiple,
+    DerivedMultiType,
     MeasurementOnly,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolOutputRuleDraft {
+    pub output_type: String,
+    pub output_type_display_name: Option<String>,
+    pub count: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -71,16 +80,63 @@ pub struct ProtocolDraftRequest {
     pub description: String,
     pub category: Option<String>,
     pub accent: Option<String>,
-    pub input_type: String,
+    pub source_protocol_id: Option<String>,
+    pub input_type: Option<String>,
     pub input_type_display_name: Option<String>,
-    pub output_behavior: ProtocolOutputBehavior,
+    pub output_behavior: Option<ProtocolOutputBehavior>,
     pub multiple_sample_mode: Option<ProtocolMultipleSampleMode>,
     pub plate_mapping: Option<bool>,
+    pub condition_container: Option<String>,
     pub output_type: Option<String>,
     pub output_type_display_name: Option<String>,
-    pub consumption_policy: ProtocolConsumptionPolicy,
-    pub template: String,
+    pub output_rules: Option<Vec<ProtocolOutputRuleDraft>>,
+    pub consumption_policy: Option<ProtocolConsumptionPolicy>,
+    pub fields: Option<Vec<ProtocolField>>,
+    pub template: Option<String>,
+    pub template_variants: Option<BTreeMap<String, String>>,
     pub created_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolVisibleWhen {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolFieldKind {
+    Text,
+    Number,
+    Select,
+    Samples,
+    PlateLayout,
+    ConditionGroups,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolField {
+    pub key: String,
+    pub label: String,
+    pub kind: ProtocolFieldKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<ProtocolVisibleWhen>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_for_input_types: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -95,6 +151,8 @@ pub struct SaveProtocolRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ProtocolVersionDraftRequest {
     pub protocol_id: String,
+    pub source_protocol_id: Option<String>,
+    pub fields: Option<Vec<ProtocolField>>,
     pub template: Option<String>,
     pub template_variants: Option<BTreeMap<String, String>>,
     pub created_at: String,
@@ -119,6 +177,7 @@ fn view_to_value(view: protocol_service::ProtocolView) -> serde_json::Value {
         "activeVersionOrigin": view.active_version_origin,
         "blocks": view.spec.get("blocks").cloned().unwrap_or(serde_json::json!([])),
         "fields": view.spec.get("fields").cloned().unwrap_or(serde_json::json!([])),
+        "protectedFieldKeys": view.spec.get("protectedFieldKeys").cloned().unwrap_or(serde_json::json!([])),
         "template": view.spec.get("template").cloned().unwrap_or(serde_json::Value::Null),
         "templateSelector": view.spec.get("templateSelector").cloned().unwrap_or(serde_json::Value::Null),
         "templateVariants": view.spec.get("templateVariants").cloned().unwrap_or(serde_json::Value::Null),
@@ -162,7 +221,7 @@ impl super::LabFlowMcp {
     /// Persist a user-defined Protocol at version 1.
     #[tool(
         name = "labflow_create_protocol",
-        description = "Create a LabFlow Protocol template. Validates the template body and registers new input/output Sample types. Refuses when the ID is taken.",
+        description = "Create a LabFlow Protocol template. Validates the template body and registers its input and all output Sample types. Supports fixed multi-type output rules. Refuses when the ID is taken.",
         annotations(title = "Create LabFlow Protocol", destructive_hint = false)
     )]
     pub(crate) async fn create_protocol(
@@ -227,11 +286,30 @@ mod tests {
             }
         }))
         .unwrap();
-        assert_eq!(parsed.request.input_type, "RNA");
+        assert_eq!(parsed.request.input_type.as_deref(), Some("RNA"));
         assert!(matches!(
             parsed.request.output_behavior,
-            ProtocolOutputBehavior::DerivedOne
+            Some(ProtocolOutputBehavior::DerivedOne)
         ));
+
+        let multi: SaveProtocolRequest = serde_json::from_value(serde_json::json!({
+            "request": {
+                "id": "multi", "name": "Multi harvest", "description": "Description",
+                "inputType": "CELL", "outputBehavior": "derived_multi_type",
+                "outputRules": [
+                    {"outputType":"SUP","outputTypeDisplayName":"Supernatant","count":1},
+                    {"outputType":"RNA","outputTypeDisplayName":"RNA","count":1}
+                ],
+                "consumptionPolicy": "retain", "template": "{{date}}",
+                "createdAt": "2026-08-27T09:00:00"
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            multi.request.output_behavior,
+            Some(ProtocolOutputBehavior::DerivedMultiType)
+        ));
+        assert_eq!(multi.request.output_rules.unwrap().len(), 2);
     }
 
     #[tokio::test]

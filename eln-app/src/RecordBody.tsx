@@ -100,11 +100,15 @@ export function RecordBody({
   attachments = [],
   eager = false,
   className = "",
+  onOpenAttachment,
+  onSaveAttachment,
 }: {
   content: string;
   attachments?: RecordAttachment[];
   eager?: boolean;
   className?: string;
+  onOpenAttachment?: (attachment: RecordAttachment) => void | Promise<void>;
+  onSaveAttachment?: (attachment: RecordAttachment) => void | Promise<void>;
 }) {
   const attachmentMap = new Map(attachments.map((item) => [item.id, item]));
   return (
@@ -122,10 +126,62 @@ export function RecordBody({
           return (
             <p
               className="record-image-missing"
-              key={`image-${segment.attachmentId}-${index}`}
+              key={`attachment-${segment.attachmentId}-${index}`}
             >
-              图片附件缺失：{segment.caption || segment.attachmentId}
+              附件缺失：
+              {segment.type === "image"
+                ? segment.caption || segment.attachmentId
+                : segment.label || segment.attachmentId}
             </p>
+          );
+        }
+        if (segment.type === "file") {
+          const size = attachment.size;
+          const displaySize =
+            size === undefined
+              ? ""
+              : size < 1024
+                ? `${size} B`
+                : size < 1024 * 1024
+                  ? `${(size / 1024).toFixed(1)} KiB`
+                  : `${(size / 1024 / 1024).toFixed(1)} MiB`;
+          return (
+            <article
+              className="record-file-card"
+              key={`file-${attachment.id}-${index}`}
+            >
+              <span className="record-file-icon" aria-hidden="true">
+                ↗
+              </span>
+              <div>
+                <b>{attachment.fileName}</b>
+                <small>
+                  {[attachment.mimeType, displaySize].filter(Boolean).join(" · ")}
+                </small>
+              </div>
+              {(onOpenAttachment || onSaveAttachment) && (
+                <div className="record-file-actions">
+                  {onOpenAttachment && (
+                    <button
+                      className="secondary"
+                      onClick={() => void onOpenAttachment(attachment)}
+                      type="button"
+                    >
+                      打开
+                    </button>
+                  )}
+                  {onSaveAttachment && (
+                    <button
+                      className="secondary"
+                      onClick={() => void onSaveAttachment(attachment)}
+                      type="button"
+                    >
+                      另存为
+                    </button>
+                  )}
+                </div>
+              )}
+            </article>
           );
         }
         return (

@@ -12,7 +12,11 @@
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::{error::Error, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolServiceError {
@@ -72,45 +76,158 @@ fn require_nonempty_string(value: &Value, key: &str) -> Result<String, ProtocolS
     Ok(trimmed.to_owned())
 }
 
-fn validate_protocol_template(template: &str, spec: &Value) -> Result<(), ProtocolServiceError> {
-    if template.trim().is_empty() {
-        return Err(ProtocolServiceError::Validation(
-            "Record template cannot be empty".into(),
-        ));
+fn validate_schema(spec: &Value) -> Result<(), ProtocolServiceError> {
+    crate::protocol_schema::validate_schema(spec).map_err(ProtocolServiceError::Validation)
+}
+
+fn optional_nonempty_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+fn requested_fields(request: &Value) -> Result<Option<Vec<Value>>, ProtocolServiceError> {
+    request
+        .get("fields")
+        .filter(|v| !v.is_null())
+        .map(|value| {
+            value
+                .as_array()
+                .cloned()
+                .ok_or_else(|| ProtocolServiceError::Validation("fields must be an array".into()))
+        })
+        .transpose()
+}
+
+fn validate_user_fields(fields: &[Value]) -> Result<(), ProtocolServiceError> {
+    for field in fields {
+        if !matches!(
+            field.get("kind").and_then(Value::as_str),
+            Some("text" | "number" | "select")
+        ) {
+            return Err(ProtocolServiceError::Validation(
+                "User fields must use text, number, or select kind".into(),
+            ));
+        }
     }
-    let mut allowed = vec![
-        "date".to_string(),
-        "input_sample_summary".to_string(),
-        "output_sample_summary".to_string(),
-        "plate_layout_summary".to_string(),
-        "treatment_summary".to_string(),
-        "condition_groups_summary".to_string(),
-    ];
-    for field in spec
+    Ok(())
+}
+
+fn field_map(spec: &Value) -> HashMap<&str, &Value> {
+    spec.get("fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|field| Some((field.get("key")?.as_str()?, field)))
+        .collect()
+}
+
+fn contains_string(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(value) => value == needle,
+        Value::Array(values) => values.iter().any(|value| contains_string(value, needle)),
+        Value::Object(values) => values.values().any(|value| contains_string(value, needle)),
+        _ => false,
+    }
+}
+
+/// Preserve fields that carry executor structure. When cloning a source, every
+/// source field is part of that capability contract. On an ordinary edit,
+/// custom scalar fields remain removable, while structural/dependency fields
+/// cannot silently invalidate execution.
+fn protect_fields(
+    base: &Value,
+    proposed: &[Value],
+    protect_all: bool,
+) -> Result<(), ProtocolServiceError> {
+    let proposed_by_key: HashMap<_, _> = proposed
+        .iter()
+        .filter_map(|field| Some((field.get("key")?.as_str()?, field)))
+        .collect();
+    let execution = base.get("execution").unwrap_or(&Value::Null);
+    let selector = base.get("templateSelector").and_then(Value::as_str);
+    let persisted_protected: HashSet<_> = base
+        .get("protectedFieldKeys")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let legacy_builtin_execution = base
+        .get("execution")
+        .and_then(|value| value.get("engine"))
+        .and_then(Value::as_str)
+        != Some("sample_flow_v1")
+        && base.get("userDefined").and_then(Value::as_bool) != Some(true);
+    let visible_dependencies: HashSet<_> = base
         .get("fields")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-    {
-        if let Some(key) = field.get("key").and_then(Value::as_str) {
-            allowed.push(key.to_owned());
+        .filter_map(|field| field.get("visibleWhen")?.get("key")?.as_str())
+        .collect();
+    for (key, old) in field_map(base) {
+        let kind = old.get("kind").and_then(Value::as_str).unwrap_or("");
+        let protected = protect_all
+            || persisted_protected.contains(key)
+            || legacy_builtin_execution
+            || matches!(key, "output_count" | "plate_format" | "condition_groups")
+            || !matches!(kind, "text" | "number" | "select")
+            || selector == Some(key)
+            || visible_dependencies.contains(key)
+            || contains_string(execution, key);
+        if !protected {
+            continue;
         }
-    }
-    let mut rest = template;
-    while let Some(start) = rest.find("{{") {
-        let after = &rest[start + 2..];
-        let end = after.find("}}").ok_or_else(|| {
-            ProtocolServiceError::Validation(
-                "Record template contains an unclosed placeholder".into(),
-            )
+        let new = proposed_by_key.get(key).ok_or_else(|| {
+            ProtocolServiceError::Validation(format!(
+                "Protected Protocol field cannot be removed: {key}"
+            ))
         })?;
-        let key = after[..end].trim();
-        if !allowed.iter().any(|candidate| candidate == key) {
+        if new.get("kind") != old.get("kind") {
             return Err(ProtocolServiceError::Validation(format!(
-                "Unknown Record template placeholder: {key}"
+                "Protected Protocol field kind cannot change: {key}"
             )));
         }
-        rest = &after[end + 2..];
+        if kind == "select" && new.get("options") != old.get("options") {
+            return Err(ProtocolServiceError::Validation(format!(
+                "Protected select options cannot change: {key}"
+            )));
+        }
+        for property in ["required", "visibleWhen", "visibleForInputTypes"] {
+            // Scalar defaults and labels are editable; executor dependencies
+            // must remain reachable through the Record form.
+            let unchanged = if property == "required" {
+                new.get(property).and_then(Value::as_bool).unwrap_or(false)
+                    == old.get(property).and_then(Value::as_bool).unwrap_or(false)
+            } else {
+                new.get(property) == old.get(property)
+            };
+            if !unchanged {
+                return Err(ProtocolServiceError::Validation(format!(
+                    "Protected Protocol field {property} cannot change: {key}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_template_overrides(spec: &mut Value, request: &Value) -> Result<(), ProtocolServiceError> {
+    if let Some(variants) = request.get("templateVariants").filter(|v| !v.is_null()) {
+        let variants = variants.as_object().ok_or_else(|| {
+            ProtocolServiceError::Validation("templateVariants must be an object".into())
+        })?;
+        spec["templateVariants"] = Value::Object(variants.clone());
+    }
+    if let Some(template) = request.get("template").filter(|v| !v.is_null()) {
+        let template = template
+            .as_str()
+            .ok_or_else(|| ProtocolServiceError::Validation("template must be text".into()))?;
+        spec["template"] = json!(template);
     }
     Ok(())
 }
@@ -130,6 +247,61 @@ fn canonical_sample_type(value: &str) -> Result<String, ProtocolServiceError> {
         ));
     }
     Ok(canonical)
+}
+
+fn requested_output_rules(
+    request: &Value,
+) -> Result<Vec<(String, String, u64)>, ProtocolServiceError> {
+    let rules = request
+        .get("outputRules")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ProtocolServiceError::Validation(
+                "Multi-type output requires at least two output rules".into(),
+            )
+        })?;
+    if !(2..=16).contains(&rules.len()) {
+        return Err(ProtocolServiceError::Validation(
+            "Multi-type output requires 2–16 output rules".into(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut total = 0_u64;
+    let mut normalized = Vec::with_capacity(rules.len());
+    for rule in rules {
+        let sample_type = canonical_sample_type(&require_string(rule, "outputType")?)?;
+        if !seen.insert(sample_type.clone()) {
+            return Err(ProtocolServiceError::Validation(format!(
+                "Duplicate output Sample type: {sample_type}"
+            )));
+        }
+        let display_name = rule
+            .get("outputTypeDisplayName")
+            .and_then(Value::as_str)
+            .unwrap_or(&sample_type)
+            .trim()
+            .to_string();
+        if display_name.is_empty() {
+            return Err(ProtocolServiceError::Validation(
+                "Output Sample display name is required".into(),
+            ));
+        }
+        let count = rule
+            .get("count")
+            .and_then(Value::as_u64)
+            .filter(|count| (1..=96).contains(count))
+            .ok_or_else(|| {
+                ProtocolServiceError::Validation("Each multi-type output count must be 1–96".into())
+            })?;
+        total += count;
+        normalized.push((sample_type, display_name, count));
+    }
+    if total > 96 {
+        return Err(ProtocolServiceError::Validation(
+            "Multi-type outputs may total at most 96 per input".into(),
+        ));
+    }
+    Ok(normalized)
 }
 
 fn register_sample_type(
@@ -304,6 +476,57 @@ pub fn save_user_protocol(
     let id = require_nonempty_string(&request, "id")?;
     let name = require_nonempty_string(&request, "name")?;
     let description = require_nonempty_string(&request, "description")?;
+    let created_at = require_nonempty_string(&request, "createdAt")?;
+    let source_protocol_id = optional_nonempty_string(&request, "sourceProtocolId");
+
+    if let Some(source_protocol_id) = source_protocol_id {
+        let source = get_protocol(connection, &source_protocol_id)?
+            .ok_or_else(|| ProtocolServiceError::NotFound("Source Protocol not found".into()))?;
+        let mut spec = source.spec;
+        spec["userDefined"] = json!(true);
+        spec["protectedFieldKeys"] =
+            Value::Array(field_map(&spec).keys().map(|key| json!(key)).collect());
+        if let Some(fields) = requested_fields(&request)? {
+            validate_user_fields(
+                fields
+                    .iter()
+                    .filter(|field| {
+                        let key = field.get("key").and_then(Value::as_str);
+                        !field_map(&spec).contains_key(key.unwrap_or(""))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )?;
+            protect_fields(&spec, &fields, true)?;
+            spec["fields"] = Value::Array(fields);
+        }
+        apply_template_overrides(&mut spec, &request)?;
+        validate_schema(&spec)?;
+
+        let tx = connection.transaction()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM protocols WHERE id=?1)",
+            [&id],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(ProtocolServiceError::Conflict(
+                "Protocol id already exists".into(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES (?1,?2,?3,1,?4,?5,'user')",
+            params![id, name, request.get("category").and_then(Value::as_str).unwrap_or(&source.category), request.get("accent").and_then(Value::as_str).unwrap_or(&source.accent), description],
+        )?;
+        tx.execute(
+            "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?1,1,?2,'user',?3)",
+            params![id, spec.to_string(), created_at],
+        )?;
+        tx.commit()?;
+        return Ok(SavedProtocol { id, version: 1 });
+    }
+
     let input_type = canonical_sample_type(&require_string(&request, "inputType")?)?;
     let input_display = request
         .get("inputTypeDisplayName")
@@ -329,6 +552,20 @@ pub fn save_user_protocol(
         .get("plateMapping")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let condition_container = request
+        .get("conditionContainer")
+        .and_then(Value::as_str)
+        .unwrap_or(if plate_mapping {
+            "plate"
+        } else {
+            "independent"
+        });
+    if !matches!(condition_container, "independent" | "plate" | "dish") {
+        return Err(ProtocolServiceError::Validation(
+            "Unsupported condition container".into(),
+        ));
+    }
+    let plate_mapping = condition_container == "plate";
     if plate_mapping
         && !(output_behavior == "derived_multiple" && multiple_sample_mode == "condition_groups")
     {
@@ -341,6 +578,7 @@ pub fn save_user_protocol(
         "derived_one" => "per_input",
         "derived_multiple" if multiple_sample_mode == "condition_groups" => "per_input_conditions",
         "derived_multiple" => "per_input_count",
+        "derived_multi_type" => "per_input_types",
         "measurement_only" => "none",
         _ => {
             return Err(ProtocolServiceError::Validation(
@@ -373,9 +611,13 @@ pub fn save_user_protocol(
     } else {
         None
     };
+    let output_rules = if output_mode == "per_input_types" {
+        Some(requested_output_rules(&request)?)
+    } else {
+        None
+    };
     let template = require_string(&request, "template")?;
-    let created_at = require_nonempty_string(&request, "createdAt")?;
-    let fields = match output_mode {
+    let mut fields = match output_mode {
         "per_input_count" => json!([
             {"key":"output_count","label":"每个输入产生数量","kind":"number","required":true,"defaultValue":"2"}
         ]),
@@ -388,6 +630,24 @@ pub fn save_user_protocol(
         ]),
         _ => json!([]),
     };
+    if let Some(additional) = requested_fields(&request)? {
+        validate_user_fields(&additional)?;
+        let fields_array = fields.as_array_mut().unwrap();
+        let existing: HashSet<_> = fields_array
+            .iter()
+            .filter_map(|field| field.get("key")?.as_str())
+            .collect();
+        if additional
+            .iter()
+            .filter_map(|field| field.get("key")?.as_str())
+            .any(|key| existing.contains(key))
+        {
+            return Err(ProtocolServiceError::Validation(
+                "A user field duplicates a generated field key".into(),
+            ));
+        }
+        fields_array.extend(additional);
+    }
     let mut execution = json!({
         "engine":"sample_flow_v1",
         "eventType":format!("custom:{id}"),
@@ -401,18 +661,27 @@ pub fn save_user_protocol(
     if let Some(output_type) = &output_type {
         execution["outputType"] = json!(output_type);
     }
+    if let Some(rules) = &output_rules {
+        execution["outputRules"] = Value::Array(
+            rules
+                .iter()
+                .map(|(sample_type, _, count)| json!({"sampleType":sample_type,"count":count}))
+                .collect(),
+        );
+    }
     if output_mode == "per_input_conditions" {
-        execution["conditionAllocation"] = json!({"plateMapping":plate_mapping});
+        execution["conditionAllocation"] =
+            json!({"plateMapping":plate_mapping,"containerMode":condition_container});
     }
     let spec = json!({
         "schemaVersion":1,
         "userDefined":true,
-        "blocks":["选择输入 Sample", "按模板记录实验过程", match output_mode { "same_sample" => "原 Sample 继续", "per_input" => "每个输入产生一个新 Sample", "per_input_count" => "每个输入产生多个相同条件的 Sample", "per_input_conditions" => "按实验条件产生多个 Sample", _ => "仅记录检测，不产生 Sample" }],
+        "blocks":["选择输入 Sample", "按模板记录实验过程", match output_mode { "same_sample" => "原 Sample 继续", "per_input" => "每个输入产生一个新 Sample", "per_input_count" => "每个输入产生多个相同条件的 Sample", "per_input_conditions" => "按实验条件产生多个 Sample", "per_input_types" => "每个输入产生多种类型的 Sample", _ => "仅记录检测，不产生 Sample" }],
         "fields":fields,
         "template":template,
         "execution":execution
     });
-    validate_protocol_template(spec["template"].as_str().unwrap_or(""), &spec)?;
+    validate_schema(&spec)?;
     let tx = connection.transaction()?;
     let exists: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM protocols WHERE id=?1)",
@@ -431,6 +700,11 @@ pub fn save_user_protocol(
             .and_then(Value::as_str)
             .unwrap_or(output_type);
         register_sample_type(&tx, output_type, output_display, &created_at)?;
+    }
+    if let Some(rules) = &output_rules {
+        for (sample_type, display_name, _) in rules {
+            register_sample_type(&tx, sample_type, display_name, &created_at)?;
+        }
     }
     tx.execute(
         "INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES (?1,?2,?3,1,?4,?5,'user')",
@@ -466,8 +740,7 @@ pub fn save_protocol_template_version(
 ) -> Result<SavedProtocolVersion, ProtocolServiceError> {
     let protocol_id = require_nonempty_string(&request, "protocolId")?;
     let created_at = require_nonempty_string(&request, "createdAt")?;
-    let tx = connection.transaction()?;
-    let (active_version, schema): (i64, String) = tx
+    let (active_version, schema): (i64, String) = connection
         .query_row(
             "SELECT p.active_version,pv.schema_json FROM protocols p JOIN protocol_versions pv ON pv.protocol_id=p.id AND pv.version_number=p.active_version WHERE p.id=?1",
             [&protocol_id],
@@ -479,37 +752,51 @@ pub fn save_protocol_template_version(
             }
             other => ProtocolServiceError::Persistence(other.to_string()),
         })?;
-    let mut spec: Value = serde_json::from_str(&schema)
+    let old_spec: Value = serde_json::from_str(&schema)
         .map_err(|_| ProtocolServiceError::Persistence("Protocol schema is invalid".into()))?;
-    if spec
-        .get("templateVariants")
-        .and_then(Value::as_object)
-        .is_some()
-    {
-        let variants = request
-            .get("templateVariants")
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                ProtocolServiceError::Validation(
-                    "This Protocol requires all template variants".into(),
-                )
-            })?;
-        let existing = spec
-            .get("templateVariants")
-            .and_then(Value::as_object)
-            .unwrap();
-        for key in existing.keys() {
-            let value = variants.get(key).and_then(Value::as_str).ok_or_else(|| {
-                ProtocolServiceError::Validation(format!("Missing template variant: {key}"))
-            })?;
-            validate_protocol_template(value, &spec)?;
-        }
-        spec["templateVariants"] = Value::Object(variants.clone());
+    let source_protocol_id = optional_nonempty_string(&request, "sourceProtocolId");
+    let mut spec = if let Some(source_protocol_id) = &source_protocol_id {
+        let mut source_spec = get_protocol(connection, source_protocol_id)?
+            .ok_or_else(|| ProtocolServiceError::NotFound("Source Protocol not found".into()))?
+            .spec;
+        // The new source is the complete capability contract, including its
+        // event type. Historical Records and ProcessEvents already retain the
+        // prior version's snapshot/event and are not rewritten here.
+        source_spec["userDefined"] = json!(true);
+        source_spec["protectedFieldKeys"] = Value::Array(
+            field_map(&source_spec)
+                .keys()
+                .map(|key| json!(key))
+                .collect(),
+        );
+        source_spec
     } else {
-        let template = require_string(&request, "template")?;
-        validate_protocol_template(&template, &spec)?;
-        spec["template"] = json!(template);
+        old_spec.clone()
+    };
+    if let Some(fields) = requested_fields(&request)? {
+        if source_protocol_id.is_some() {
+            protect_fields(&spec, &fields, true)?;
+        } else {
+            protect_fields(&old_spec, &fields, false)?;
+        }
+        let base_fields = field_map(&spec);
+        let added = fields
+            .iter()
+            .filter(|field| {
+                field
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .is_none_or(|key| !base_fields.contains_key(key))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        validate_user_fields(&added)?;
+        spec["fields"] = Value::Array(fields);
     }
+    apply_template_overrides(&mut spec, &request)?;
+    validate_schema(&spec)?;
+
+    let tx = connection.transaction()?;
     let next_version: i64 = tx.query_row(
         "SELECT coalesce(max(version_number),0)+1 FROM protocol_versions WHERE protocol_id=?1",
         [&protocol_id],
@@ -565,6 +852,19 @@ mod tests {
                 [id],
             )
             .unwrap();
+    }
+
+    fn seed_builtins(connection: &Connection) {
+        for builtin in crate::protocol_catalog::builtins() {
+            connection.execute(
+                "INSERT INTO protocols (id,name,category,active_version,accent,description,origin) VALUES (?1,?2,?3,?4,?5,'','builtin')",
+                params![builtin.id, builtin.name, builtin.category, builtin.schema_version, builtin.accent],
+            ).unwrap();
+            connection.execute(
+                "INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at) VALUES (?1,?2,?3,'builtin','now')",
+                params![builtin.id, builtin.schema_version, builtin.schema],
+            ).unwrap();
+        }
     }
 
     fn seed_record_snapshot(connection: &Connection, protocol_id: &str, snapshot: &Value) {
@@ -718,6 +1018,64 @@ mod tests {
     }
 
     #[test]
+    fn multi_type_protocol_registers_every_output_rule() {
+        let mut connection = fresh();
+        save_user_protocol(
+            &mut connection,
+            json!({
+                "id":"multi-harvest","name":"Multi harvest","description":"d",
+                "inputType":"CELL","inputTypeDisplayName":"Cell",
+                "outputBehavior":"derived_multi_type","consumptionPolicy":"retain",
+                "outputRules":[
+                    {"outputType":"SUP","outputTypeDisplayName":"Supernatant","count":1},
+                    {"outputType":"RNA","outputTypeDisplayName":"RNA","count":1},
+                    {"outputType":"PROTEIN","outputTypeDisplayName":"Protein","count":2}
+                ],
+                "template":"{{input_sample_summary}} -> {{output_sample_summary}}",
+                "createdAt":"2026-08-26T09:00:00Z"
+            }),
+        )
+        .unwrap();
+
+        let view = get_protocol(&connection, "multi-harvest").unwrap().unwrap();
+        assert_eq!(view.spec["execution"]["outputMode"], "per_input_types");
+        assert_eq!(
+            view.spec["execution"]["outputRules"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        let registered: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sample_types WHERE canonical_type IN ('SUP','RNA','PROTEIN')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(registered, 3);
+
+        let duplicate = save_user_protocol(
+            &mut connection,
+            json!({
+                "id":"invalid-multi","name":"Invalid","description":"d",
+                "inputType":"CELL","outputBehavior":"derived_multi_type",
+                "consumptionPolicy":"retain",
+                "outputRules":[
+                    {"outputType":"RNA","outputTypeDisplayName":"RNA","count":1},
+                    {"outputType":"rna","outputTypeDisplayName":"RNA duplicate","count":1}
+                ],
+                "template":"body","createdAt":"now"
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(duplicate.code(), "validation_error");
+        assert!(get_protocol(&connection, "invalid-multi")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn condition_allocated_protocol_keeps_output_type_independent_from_plate_mapping() {
         let mut connection = fresh();
         save_user_protocol(
@@ -742,6 +1100,37 @@ mod tests {
             true
         );
         assert_eq!(view.spec["fields"][1]["kind"], "condition_groups");
+    }
+
+    #[test]
+    fn dish_condition_allocation_is_persisted_without_plate_field() {
+        let mut connection = fresh();
+        save_user_protocol(
+            &mut connection,
+            json!({
+                "id":"p-dishes","name":"Dish split","description":"d",
+                "inputType":"CELL","inputTypeDisplayName":"Cell",
+                "outputBehavior":"derived_multiple","multipleSampleMode":"condition_groups",
+                "conditionContainer":"dish","outputType":"CELL","outputTypeDisplayName":"Cell",
+                "consumptionPolicy":"retain","template":"{{condition_groups_summary}}",
+                "createdAt":"2026-09-14T09:00:00Z"
+            }),
+        )
+        .unwrap();
+        let view = get_protocol(&connection, "p-dishes").unwrap().unwrap();
+        assert_eq!(
+            view.spec["execution"]["conditionAllocation"]["containerMode"],
+            "dish"
+        );
+        assert_eq!(
+            view.spec["execution"]["conditionAllocation"]["plateMapping"],
+            false
+        );
+        assert!(view.spec["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|field| field["key"] != "plate_format"));
     }
 
     #[test]
@@ -810,5 +1199,125 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code(), "not_found");
+    }
+
+    #[test]
+    fn all_builtin_active_schemas_can_be_copied_without_client_execution() {
+        let mut connection = fresh();
+        seed_builtins(&connection);
+        for builtin in crate::protocol_catalog::builtins() {
+            let id = format!("copy-{}", builtin.id);
+            save_user_protocol(
+                &mut connection,
+                json!({
+                    "id":id,"name":format!("Copy {}", builtin.name),"description":"copy",
+                    "sourceProtocolId":builtin.id,"createdAt":"2026-09-12T09:00:00",
+                    "execution":{"eventType":"attacker","outputMode":"none"}
+                }),
+            )
+            .unwrap();
+            let copied = get_protocol(&connection, &id).unwrap().unwrap().spec;
+            let source: Value = serde_json::from_str(builtin.schema).unwrap();
+            assert_eq!(copied["execution"], source["execution"], "{}", builtin.id);
+            assert_eq!(copied["fields"], source["fields"], "{}", builtin.id);
+            assert_eq!(
+                copied.get("terminalAssay"),
+                source.get("terminalAssay"),
+                "{}",
+                builtin.id
+            );
+        }
+    }
+
+    #[test]
+    fn source_and_field_failures_are_atomic() {
+        let mut connection = fresh();
+        seed_builtins(&connection);
+        let missing = save_user_protocol(&mut connection, json!({
+            "id":"missing-copy","name":"Copy","description":"d","sourceProtocolId":"absent","createdAt":"now"
+        })).unwrap_err();
+        assert_eq!(missing.code(), "not_found");
+        let invalid = save_user_protocol(&mut connection, json!({
+            "id":"bad-copy","name":"Copy","description":"d","sourceProtocolId":"pro-rna","createdAt":"now",
+            "fields":[{"key":"resuspension_volume","label":"x","kind":"text"},{"key":"storage","label":"x","kind":"select","options":["立即逆转录","-80℃ 保存"]}]
+        })).unwrap_err();
+        assert_eq!(invalid.code(), "validation_error");
+        let count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM protocols WHERE id IN ('missing-copy','bad-copy')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn version_fields_are_frozen_and_protected_capability_fields_survive() {
+        let mut connection = fresh();
+        seed_builtins(&connection);
+        save_user_protocol(&mut connection, json!({
+            "id":"rna-copy","name":"RNA copy","description":"d","sourceProtocolId":"pro-rna","createdAt":"now"
+        })).unwrap();
+        let original = get_protocol(&connection, "rna-copy").unwrap().unwrap().spec;
+        let mut fields = original["fields"].as_array().unwrap().clone();
+        fields[0]["label"] = json!("New label");
+        fields.push(json!({"key":"note","label":"Note","kind":"text"}));
+        save_protocol_template_version(
+            &mut connection,
+            json!({
+                "protocolId":"rna-copy","fields":fields,"createdAt":"later"
+            }),
+        )
+        .unwrap();
+        let (v1, v2): (String, String) = connection.query_row(
+            "SELECT a.schema_json,b.schema_json FROM protocol_versions a JOIN protocol_versions b ON b.protocol_id=a.protocol_id WHERE a.protocol_id='rna-copy' AND a.version_number=1 AND b.version_number=2",
+            [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_ne!(
+            serde_json::from_str::<Value>(&v1).unwrap()["fields"],
+            serde_json::from_str::<Value>(&v2).unwrap()["fields"]
+        );
+        let err = save_protocol_template_version(&mut connection, json!({
+            "protocolId":"rna-copy","fields":[{"key":"note","label":"Note","kind":"text"}],"template":"{{note}}","createdAt":"latest"
+        })).unwrap_err();
+        assert_eq!(err.code(), "validation_error");
+        assert_eq!(
+            get_protocol(&connection, "rna-copy")
+                .unwrap()
+                .unwrap()
+                .version,
+            2
+        );
+    }
+
+    #[test]
+    fn source_version_switches_to_the_new_execution_without_rewriting_old_version() {
+        let mut connection = fresh();
+        seed_builtins(&connection);
+        save_user_protocol(
+            &mut connection,
+            json!({"id":"switchable","name":"Switchable","description":"d","sourceProtocolId":"pro-rna","createdAt":"now"}),
+        )
+        .unwrap();
+        save_protocol_template_version(
+            &mut connection,
+            json!({"protocolId":"switchable","sourceProtocolId":"pro-cell-treatment","createdAt":"later"}),
+        )
+        .unwrap();
+        let (v1, v2): (String, String) = connection
+            .query_row(
+                "SELECT a.schema_json,b.schema_json FROM protocol_versions a JOIN protocol_versions b ON b.protocol_id=a.protocol_id WHERE a.protocol_id='switchable' AND a.version_number=1 AND b.version_number=2",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&v1).unwrap()["execution"]["eventType"],
+            "rna_extraction"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&v2).unwrap()["execution"]["eventType"],
+            "treatment"
+        );
     }
 }

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  attachmentLabelFromPath,
   imageCaptionFromPath,
+  insertFileReferences,
   insertImageReference,
   parseRecordBody,
 } from "../src/recordBodyFormat";
@@ -15,6 +17,23 @@ test("record body parser preserves text around inline attachment references", ()
     { type: "image", caption: "Day 3", attachmentId: "attachment-1" },
     { type: "text", text: "\nafter" },
   ]);
+});
+
+test("file attachments are parsed separately from previewable images", () => {
+  const inserted = insertFileReferences("result", 6, [
+    { id: "attachment-csv", label: "raw data.csv" },
+    { id: "attachment-pdf", label: "instrument.pdf" },
+  ]);
+  assert.equal(
+    inserted.content,
+    "result\n\n[附件：raw data.csv](labflow-file://attachment-csv)\n[附件：instrument.pdf](labflow-file://attachment-pdf)",
+  );
+  assert.deepEqual(parseRecordBody(inserted.content).slice(1), [
+    { type: "file", label: "附件：raw data.csv", attachmentId: "attachment-csv" },
+    { type: "text", text: "\n" },
+    { type: "file", label: "附件：instrument.pdf", attachmentId: "attachment-pdf" },
+  ]);
+  assert.equal(attachmentLabelFromPath("C:\\Data\\result.xlsx"), "result.xlsx");
 });
 
 test("image insertion creates a stable reference at the cursor", () => {

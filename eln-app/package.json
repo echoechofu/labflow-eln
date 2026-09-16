@@ -1,7 +1,7 @@
 {
   "name": "eln-app",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "build": "npm run build:web",
     "build:web": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "lint": "oxlint --ignore-pattern 'src-tauri/target/**'",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "tsx --tsconfig tsconfig.app.json --test tests/*.test.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "npm run tauri:build:app && ./scripts/package-macos-unsigned.sh",

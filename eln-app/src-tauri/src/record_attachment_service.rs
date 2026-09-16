@@ -31,6 +31,23 @@ pub struct InsertRecordImageRequest {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordFileSource {
+    pub id: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsertRecordFilesRequest {
+    pub record_id: String,
+    pub files: Vec<RecordFileSource>,
+    pub rendered_content: String,
+    pub change_id: String,
+    pub created_at: String,
+}
+
 #[derive(Debug)]
 pub struct AttachmentBytes {
     pub bytes: Vec<u8>,
@@ -69,6 +86,57 @@ fn sha256_file(path: &Path) -> Result<String, RecordServiceError> {
         hasher.update(&buffer[..count]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn mime_type_for_file(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("pdf") => "application/pdf",
+        Some("csv") => "text/csv",
+        Some("txt") | Some("md") | Some("log") => "text/plain",
+        Some("json") => "application/json",
+        Some("xml") => "application/xml",
+        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        Some("xls") => "application/vnd.ms-excel",
+        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("doc") => "application/msword",
+        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        Some("ppt") => "application/vnd.ms-powerpoint",
+        Some("zip") => "application/zip",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("tif") | Some("tiff") => "image/tiff",
+        _ => "application/octet-stream",
+    }
+}
+
+fn internal_original_name(path: &Path) -> String {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("attachment.bin");
+    let safe: String = file_name
+        .chars()
+        .map(|character| {
+            if character.is_control() || matches!(character, '/' | '\\' | ':') {
+                '_'
+            } else {
+                character
+            }
+        })
+        .take(160)
+        .collect();
+    let safe = safe.trim_matches(['.', ' ']);
+    if safe.is_empty() {
+        "attachment.bin".into()
+    } else {
+        safe.into()
+    }
 }
 
 fn remove_created_directory(path: &Path) {
@@ -259,7 +327,173 @@ pub fn insert_record_image(
     })
 }
 
-fn portable_file_path(app_data_root: &Path, relative_path: &str) -> Option<PathBuf> {
+pub fn insert_record_files(
+    connection: &mut Connection,
+    files_root: &Path,
+    request: &InsertRecordFilesRequest,
+) -> Result<Vec<RecordAttachment>, RecordServiceError> {
+    if request.files.is_empty() || request.files.len() > 50 {
+        return Err(RecordServiceError::Validation(
+            "Choose between 1 and 50 files.".into(),
+        ));
+    }
+    if !valid_id(&request.change_id) {
+        return Err(RecordServiceError::Validation(
+            "Change id contains unsupported characters.".into(),
+        ));
+    }
+    if request.rendered_content.trim().is_empty() {
+        return Err(RecordServiceError::Validation(
+            "Record body cannot be empty.".into(),
+        ));
+    }
+    for source in &request.files {
+        if !valid_id(&source.id) {
+            return Err(RecordServiceError::Validation(
+                "Attachment id contains unsupported characters.".into(),
+            ));
+        }
+        if !request
+            .rendered_content
+            .contains(&format!("labflow-file://{}", source.id))
+        {
+            return Err(RecordServiceError::Validation(
+                "Record body must contain every inserted file reference.".into(),
+            ));
+        }
+    }
+
+    let current_json: String = connection
+        .query_row(
+            "SELECT current_data_json FROM records WHERE id=?1",
+            [&request.record_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| RecordServiceError::NotFound("Record not found".into()))?;
+    let mut current: Value = serde_json::from_str(&current_json)
+        .map_err(|error| RecordServiceError::Persistence(error.to_string()))?;
+    if !current.is_object() {
+        return Err(RecordServiceError::Persistence(
+            "Record data is invalid.".into(),
+        ));
+    }
+
+    fs::create_dir_all(files_root)
+        .map_err(|error| RecordServiceError::Persistence(error.to_string()))?;
+    let mut attachments = Vec::with_capacity(request.files.len());
+    let mut created_directories: Vec<PathBuf> = Vec::with_capacity(request.files.len());
+    for item in &request.files {
+        let source = PathBuf::from(&item.source_path);
+        let metadata = match fs::metadata(&source) {
+            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => metadata,
+            Ok(_) => {
+                for path in &created_directories {
+                    remove_created_directory(path);
+                }
+                return Err(RecordServiceError::Validation(
+                    "Selected attachment is empty or is not a file.".into(),
+                ));
+            }
+            Err(error) => {
+                for path in &created_directories {
+                    remove_created_directory(path);
+                }
+                return Err(RecordServiceError::Validation(format!(
+                    "Attachment cannot be read: {error}"
+                )));
+            }
+        };
+        let file_name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                RecordServiceError::Validation("Attachment filename is invalid.".into())
+            })?
+            .to_owned();
+        let directory = files_root.join(&item.id);
+        if let Err(error) = fs::create_dir(&directory) {
+            for path in &created_directories {
+                remove_created_directory(path);
+            }
+            return Err(RecordServiceError::Conflict(format!(
+                "Attachment already exists or cannot be created: {error}"
+            )));
+        }
+        created_directories.push(directory.clone());
+        let original_name = internal_original_name(&source);
+        let original_path = directory.join(&original_name);
+        if let Err(error) = fs::copy(&source, &original_path) {
+            for path in &created_directories {
+                remove_created_directory(path);
+            }
+            return Err(RecordServiceError::Persistence(error.to_string()));
+        }
+        let content_sha256 = match sha256_file(&original_path) {
+            Ok(value) => value,
+            Err(error) => {
+                for path in &created_directories {
+                    remove_created_directory(path);
+                }
+                return Err(error);
+            }
+        };
+        attachments.push(RecordAttachment {
+            id: item.id.clone(),
+            file_name,
+            relative_path: format!("files/{}/{}", item.id, original_name),
+            mime_type: Some(mime_type_for_file(&source).into()),
+            size: Some(metadata.len() as i64),
+            content_sha256: Some(content_sha256),
+            preview_relative_path: None,
+            width_px: None,
+            height_px: None,
+        });
+    }
+
+    let old_content = current
+        .get("renderedContent")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let new_content = json!(request.rendered_content);
+    current["renderedContent"] = new_content.clone();
+    let transaction_result = (|| {
+        let transaction = connection.transaction()?;
+        for attachment in &attachments {
+            transaction.execute(
+                "INSERT INTO attachments (id,record_id,file_name,relative_path,mime_type,size,created_at,content_sha256) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![
+                    attachment.id,
+                    request.record_id,
+                    attachment.file_name,
+                    attachment.relative_path,
+                    attachment.mime_type,
+                    attachment.size,
+                    request.created_at,
+                    attachment.content_sha256,
+                ],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE records SET current_data_json=?2,updated_at=?3 WHERE id=?1",
+            params![request.record_id, current.to_string(), request.created_at],
+        )?;
+        transaction.execute(
+            "INSERT INTO record_changes (id,record_id,field_path,old_value_json,new_value_json,actor_id,changed_at) VALUES (?1,?2,'renderedContent',?3,?4,'local_user',?5)",
+            params![request.change_id, request.record_id, old_content.to_string(), new_content.to_string(), request.created_at],
+        )?;
+        transaction.commit()?;
+        Ok::<(), RecordServiceError>(())
+    })();
+    if let Err(error) = transaction_result {
+        for path in &created_directories {
+            remove_created_directory(path);
+        }
+        return Err(error);
+    }
+    Ok(attachments)
+}
+
+pub(crate) fn portable_file_path(app_data_root: &Path, relative_path: &str) -> Option<PathBuf> {
     let path = Path::new(relative_path);
     let mut components = path.components();
     if components.next() != Some(Component::Normal("files".as_ref())) {
@@ -269,6 +503,104 @@ fn portable_file_path(app_data_root: &Path, relative_path: &str) -> Option<PathB
         return None;
     }
     Some(app_data_root.join(path))
+}
+
+fn attachment_path(
+    connection: &Connection,
+    app_data_root: &Path,
+    record_id: &str,
+    attachment_id: &str,
+) -> Result<(PathBuf, String), RecordServiceError> {
+    if !valid_id(attachment_id) {
+        return Err(RecordServiceError::Validation(
+            "Attachment id is invalid.".into(),
+        ));
+    }
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT relative_path,file_name FROM attachments WHERE id=?1 AND record_id=?2",
+            params![attachment_id, record_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let (relative_path, file_name) =
+        row.ok_or_else(|| RecordServiceError::NotFound("Attachment not found.".into()))?;
+    let path = portable_file_path(app_data_root, &relative_path)
+        .ok_or_else(|| RecordServiceError::Persistence("Attachment locator is invalid.".into()))?;
+    if !path.is_file() {
+        return Err(RecordServiceError::NotFound(
+            "Attachment file is missing.".into(),
+        ));
+    }
+    Ok((path, file_name))
+}
+
+fn unsafe_to_open(file_name: &str) -> bool {
+    matches!(
+        Path::new(file_name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some(
+            "app"
+                | "exe"
+                | "msi"
+                | "bat"
+                | "cmd"
+                | "com"
+                | "scr"
+                | "ps1"
+                | "sh"
+                | "command"
+                | "jar"
+                | "js"
+                | "vbs"
+                | "pkg"
+                | "dmg"
+        )
+    )
+}
+
+pub fn save_record_attachment_as(
+    connection: &Connection,
+    app_data_root: &Path,
+    record_id: &str,
+    attachment_id: &str,
+    destination: &Path,
+) -> Result<(), RecordServiceError> {
+    let (source, _) = attachment_path(connection, app_data_root, record_id, attachment_id)?;
+    if destination.is_dir() {
+        return Err(RecordServiceError::Validation(
+            "Attachment destination must be a file.".into(),
+        ));
+    }
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|error| RecordServiceError::Persistence(error.to_string()))
+}
+
+pub fn open_record_attachment(
+    connection: &Connection,
+    app_data_root: &Path,
+    record_id: &str,
+    attachment_id: &str,
+) -> Result<(), RecordServiceError> {
+    let (path, file_name) = attachment_path(connection, app_data_root, record_id, attachment_id)?;
+    if unsafe_to_open(&file_name) {
+        return Err(RecordServiceError::Validation(
+            "For safety, executable or installer attachments cannot be opened directly. Save the file first if you need it.".into(),
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("/usr/bin/open");
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("explorer.exe");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(path).spawn().map(|_| ()).map_err(|error| {
+        RecordServiceError::Persistence(format!("Cannot open attachment: {error}"))
+    })
 }
 
 pub fn load_image_preview(
@@ -392,6 +724,54 @@ mod tests {
             insert_record_image(&mut connection, &root.join("files"), &request).unwrap_err();
         assert_eq!(error.code(), "validation_error");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_insert_keeps_exact_bytes_and_can_be_saved_again() {
+        let root = workspace("file-insert");
+        let files = root.join("files");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("instrument.csv");
+        fs::write(&source, b"well,value\nA1,0.42\n").unwrap();
+        let mut connection = seeded_connection();
+        let request = InsertRecordFilesRequest {
+            record_id: "r".into(),
+            files: vec![RecordFileSource {
+                id: "attachment-csv".into(),
+                source_path: source.to_string_lossy().into_owned(),
+            }],
+            rendered_content: "before\n[附件：instrument.csv](labflow-file://attachment-csv)"
+                .into(),
+            change_id: "change-file".into(),
+            created_at: "2026-08-31T09:31:00".into(),
+        };
+        let attachments = insert_record_files(&mut connection, &files, &request).unwrap();
+        assert_eq!(attachments[0].mime_type.as_deref(), Some("text/csv"));
+        assert_eq!(attachments[0].preview_relative_path, None);
+        assert_eq!(
+            fs::read(root.join(&attachments[0].relative_path)).unwrap(),
+            fs::read(&source).unwrap()
+        );
+        let destination = root.join("saved.csv");
+        save_record_attachment_as(&connection, &root, "r", "attachment-csv", &destination).unwrap();
+        assert_eq!(fs::read(destination).unwrap(), fs::read(source).unwrap());
+        assert!(save_record_attachment_as(
+            &connection,
+            &root,
+            "wrong-record",
+            "attachment-csv",
+            &root.join("leak.csv")
+        )
+        .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn executable_attachments_are_not_opened_directly() {
+        assert!(unsafe_to_open("installer.exe"));
+        assert!(unsafe_to_open("analysis.command"));
+        assert!(!unsafe_to_open("results.xlsx"));
+        assert!(!unsafe_to_open("report.pdf"));
     }
 
     #[test]
