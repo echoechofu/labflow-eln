@@ -182,3 +182,21 @@ test("consumed Samples are excluded from Record input candidates", () => {
     ["available"],
   );
 });
+
+test("an unrestricted Protocol accepts every available Sample type", () => {
+  const samples = [
+    { id: "cell", experimentId: "exp", code: "CELL-1", type: "CELL" },
+    { id: "rna", experimentId: "exp", code: "RNA-1", type: "RNA" },
+    {
+      id: "consumed",
+      experimentId: "exp",
+      code: "RNA-2",
+      type: "RNA",
+      consumed: true,
+    },
+  ] as Sample[];
+  assert.deepEqual(
+    eligibleRecordInputSamples(samples, "exp", []).map((sample) => sample.id),
+    ["cell", "rna"],
+  );
+});

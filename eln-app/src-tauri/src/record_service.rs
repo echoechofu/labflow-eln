@@ -614,6 +614,7 @@ pub fn start_task_record(
     values: Value,
     input_sample_ids: Vec<String>,
     external_inputs: Vec<Value>,
+    output_drafts: Vec<Value>,
 ) -> Result<StartedRecord, RecordServiceError> {
     let result = protocol_execution::execute_with_external(
         connection,
@@ -623,6 +624,7 @@ pub fn start_task_record(
         values,
         input_sample_ids,
         external_inputs,
+        output_drafts,
     )
     .map_err(|error| RecordServiceError::Persistence(error.to_string()))?;
     Ok(StartedRecord { task: result.task })

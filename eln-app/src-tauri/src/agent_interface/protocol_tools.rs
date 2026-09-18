@@ -44,6 +44,10 @@ pub struct DeleteProtocolRequest {
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolOutputBehavior {
     SameSample,
+    OneToOne,
+    OneToMany,
+    OneToZero,
+    // Legacy values remain available for older clients.
     DerivedOne,
     DerivedMultiple,
     DerivedMultiType,
@@ -56,6 +60,13 @@ pub struct ProtocolOutputRuleDraft {
     pub output_type: String,
     pub output_type_display_name: Option<String>,
     pub count: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolInputTypeDraft {
+    pub canonical_type: String,
+    pub display_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -83,6 +94,8 @@ pub struct ProtocolDraftRequest {
     pub source_protocol_id: Option<String>,
     pub input_type: Option<String>,
     pub input_type_display_name: Option<String>,
+    pub input_types: Option<Vec<ProtocolInputTypeDraft>>,
+    pub allow_any_input_type: Option<bool>,
     pub output_behavior: Option<ProtocolOutputBehavior>,
     pub multiple_sample_mode: Option<ProtocolMultipleSampleMode>,
     pub plate_mapping: Option<bool>,
@@ -155,6 +168,7 @@ pub struct ProtocolVersionDraftRequest {
     pub fields: Option<Vec<ProtocolField>>,
     pub template: Option<String>,
     pub template_variants: Option<BTreeMap<String, String>>,
+    pub default_output_types: Option<Vec<String>>,
     pub created_at: String,
 }
 
@@ -221,7 +235,7 @@ impl super::LabFlowMcp {
     /// Persist a user-defined Protocol at version 1.
     #[tool(
         name = "labflow_create_protocol",
-        description = "Create a LabFlow Protocol template. Validates the template body and registers its input and all output Sample types. Supports fixed multi-type output rules. Refuses when the ID is taken.",
+        description = "Create a LabFlow Protocol template. Validates its applicable input Sample types (or an explicit unrestricted choice), Record fields, template, and one of four flow rules: retain the same Sample, consume 1→1, retain-or-consume 1→many, or consume 1→0. New output Sample types and details are supplied when the Record is created. Refuses when the ID is taken.",
         annotations(title = "Create LabFlow Protocol", destructive_hint = false)
     )]
     pub(crate) async fn create_protocol(
@@ -280,16 +294,20 @@ mod tests {
         let parsed: SaveProtocolRequest = serde_json::from_value(serde_json::json!({
             "request": {
                 "id": "p1", "name": "Protocol", "description": "Description",
-                "inputType": "RNA", "outputBehavior": "derived_one",
-                "outputType": "CDNA", "consumptionPolicy": "consume",
+                "inputTypes": [
+                    {"canonicalType":"RNA","displayName":"RNA"},
+                    {"canonicalType":"TISSUE","displayName":"组织"}
+                ],
+                "allowAnyInputType": false, "outputBehavior": "one_to_one",
+                "consumptionPolicy": "consume",
                 "template": "{{date}}", "createdAt": "2026-08-27T09:00:00"
             }
         }))
         .unwrap();
-        assert_eq!(parsed.request.input_type.as_deref(), Some("RNA"));
+        assert_eq!(parsed.request.input_types.as_ref().unwrap().len(), 2);
         assert!(matches!(
             parsed.request.output_behavior,
-            Some(ProtocolOutputBehavior::DerivedOne)
+            Some(ProtocolOutputBehavior::OneToOne)
         ));
 
         let multi: SaveProtocolRequest = serde_json::from_value(serde_json::json!({

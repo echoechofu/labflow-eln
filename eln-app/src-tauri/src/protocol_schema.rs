@@ -230,6 +230,8 @@ pub fn validate_schema(spec: &Value) -> Result<(), String> {
         "per_input_count",
         "per_input_conditions",
         "per_input_types",
+        "record_one",
+        "record_many",
         "same_sample",
         "plate_or_dish",
         "plate_wells",
@@ -276,6 +278,32 @@ pub fn validate_schema(spec: &Value) -> Result<(), String> {
     }
     if mode == "same_sample" && execution["consumptionPolicy"] == "consume" {
         return Err("A consumed Sample cannot continue as the output".into());
+    }
+    if matches!(mode, "record_one" | "record_many") {
+        if mode == "record_one" && execution["consumptionPolicy"] != "consume" {
+            return Err("1→1 Record-defined output must consume its input".into());
+        }
+        if let Some(defaults) = execution.get("defaultOutputTypes") {
+            let defaults = defaults
+                .as_array()
+                .filter(|values| (1..=96).contains(&values.len()))
+                .ok_or("defaultOutputTypes must contain 1–96 entries")?;
+            for sample_type in defaults {
+                let sample_type = sample_type
+                    .as_str()
+                    .ok_or("Default output type must be text")?;
+                if sample_type.is_empty()
+                    || sample_type.len() > 32
+                    || !sample_type.chars().enumerate().all(|(index, character)| {
+                        character.is_ascii_uppercase()
+                            || character.is_ascii_digit() && index > 0
+                            || character == '_' && index > 0
+                    })
+                {
+                    return Err(format!("Invalid default output type: {sample_type}"));
+                }
+            }
+        }
     }
     if spec.get("terminalAssay").is_some() && !keys.contains("assay_items") {
         return Err("Terminal Assay requires assay_items".into());

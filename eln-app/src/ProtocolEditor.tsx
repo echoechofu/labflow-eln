@@ -3,6 +3,11 @@ import type { Protocol, ProtocolField, SampleTypeDefinition } from "./domain";
 import { ProtocolComposer } from "./ProtocolComposer";
 import { validProtocolFieldKey } from "./protocolFieldKey";
 import {
+  groupSampleTypes,
+  selectableSampleTypes,
+  validCanonicalSampleType,
+} from "./sampleTypeCatalog";
+import {
   loadStore,
   saveProtocolTemplateVersion,
   saveUserProtocol,
@@ -12,15 +17,13 @@ import {
 import "./protocol-editor.css";
 
 type OutputBehavior = NonNullable<UserProtocolDraft["outputBehavior"]>;
-type MultipleSampleMode = NonNullable<UserProtocolDraft["multipleSampleMode"]>;
-type OutputRuleDraft = NonNullable<UserProtocolDraft["outputRules"]>[number];
 const canonicalType = (value: string) =>
   value
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9_]/g, "_");
 const validSampleType = (value: string) =>
-  /^[A-Z][A-Z0-9_]{0,31}$/.test(canonicalType(value));
+  validCanonicalSampleType(canonicalType(value));
 const simpleTemplate =
   "日期：{{date}}\n输入 Sample：{{input_sample_summary}}\n\nProcedure:\n1. \n2. \n3. \n\n输出 Sample：{{output_sample_summary}}";
 const cloneFields = (fields?: ProtocolField[]) =>
@@ -65,20 +68,15 @@ export function ProtocolCreationWizard({
   const [sourceId, setSourceId] = useState("");
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState("");
-  const [inputType, setInputType] = useState("RNA");
+  const [inputTypes, setInputTypes] = useState<string[]>(["RNA"]);
+  const [allowAnyInputType, setAllowAnyInputType] = useState(false);
+  const [customInputTypes, setCustomInputTypes] = useState<
+    SampleTypeDefinition[]
+  >([]);
+  const [customInputCode, setCustomInputCode] = useState("");
+  const [customInputName, setCustomInputName] = useState("");
   const [outputBehavior, setOutputBehavior] =
-    useState<OutputBehavior>("derived_one");
-  const [outputType, setOutputType] = useState("CDNA");
-  const [outputRules, setOutputRules] = useState<OutputRuleDraft[]>([
-    { outputType: "SUP", outputTypeDisplayName: "上清", count: 1 },
-    { outputType: "RNA", outputTypeDisplayName: "RNA", count: 1 },
-    { outputType: "PROTEIN", outputTypeDisplayName: "蛋白", count: 1 },
-  ]);
-  const [multipleSampleMode, setMultipleSampleMode] =
-    useState<MultipleSampleMode>("identical");
-  const [conditionContainer, setConditionContainer] = useState<
-    "independent" | "plate" | "dish"
-  >("independent");
+    useState<OutputBehavior>("one_to_one");
   const [consumptionPolicy, setConsumptionPolicy] = useState<
     "retain" | "consume"
   >("consume");
@@ -117,40 +115,8 @@ export function ProtocolCreationWizard({
   const validate = () => {
     if (step === 1 && (!name.trim() || !description.trim()))
       return "请填写名称和描述。";
-    if (!source && step === 2 && !validSampleType(inputType))
-      return "请选择或新建输入 Sample 类型。";
-    if (
-      !source &&
-      step === 2 &&
-      ["derived_one", "derived_multiple"].includes(outputBehavior) &&
-      !validSampleType(outputType)
-    )
-      return "请选择或新建输出 Sample 类型。";
-    if (!source && step === 2 && outputBehavior === "derived_multi_type") {
-      const types = outputRules.map((rule) => canonicalType(rule.outputType));
-      if (
-        outputRules.length < 2 ||
-        outputRules.length > 16 ||
-        outputRules.some((rule) => !validSampleType(rule.outputType)) ||
-        new Set(types).size !== types.length
-      )
-        return "请添加 2–16 种互不重复的输出 Sample 类型。";
-      if (
-        outputRules.some(
-          (rule) =>
-            !Number.isInteger(rule.count) || rule.count < 1 || rule.count > 96,
-        ) ||
-        outputRules.reduce((total, rule) => total + rule.count, 0) > 96
-      )
-        return "每种输出数量须为 1–96，且每个输入的输出总数不能超过 96。";
-    }
-    if (
-      !source &&
-      step === 2 &&
-      outputBehavior === "same_sample" &&
-      consumptionPolicy === "consume"
-    )
-      return "原 Sample 继续时不能同时将输入标记为已消耗。";
+    if (!source && step === 2 && !allowAnyInputType && inputTypes.length === 0)
+      return "请至少选择一种适用的输入类型，或选择“不限类型”。";
     if (
       step === 3 &&
       !template.trim() &&
@@ -217,58 +183,30 @@ export function ProtocolCreationWizard({
           templateVariants: Object.keys(variants).length ? variants : undefined,
         });
       else {
-        const selectedInput = sampleTypes.find(
-          (item) => item.canonicalType === canonicalType(inputType),
-        );
-        const selectedOutput = sampleTypes.find(
-          (item) => item.canonicalType === canonicalType(outputType),
-        );
-        const normalizedOutputRules = outputRules.map((rule) => {
-          const canonical = canonicalType(rule.outputType);
-          const registered = sampleTypes.find(
-            (item) => item.canonicalType === canonical,
-          );
-          return {
-            outputType: canonical,
-            outputTypeDisplayName:
-              registered?.displayName ||
-              rule.outputTypeDisplayName ||
-              rule.outputType.trim(),
-            count: rule.count,
-          };
-        });
+        const availableTypes = [...sampleTypes, ...customInputTypes];
         await saveUserProtocol({
           ...base,
           fields,
-          inputType: canonicalType(inputType),
-          inputTypeDisplayName: selectedInput?.displayName || inputType.trim(),
+          inputTypes: allowAnyInputType
+            ? []
+            : inputTypes.map((value) => {
+                const canonical = canonicalType(value);
+                const selected = availableTypes.find(
+                  (item) => item.canonicalType === canonical,
+                );
+                return {
+                  canonicalType: canonical,
+                  displayName: selected?.displayName || canonical,
+                };
+              }),
+          allowAnyInputType,
           outputBehavior,
-          multipleSampleMode:
-            outputBehavior === "derived_multiple"
-              ? multipleSampleMode
-              : undefined,
-          plateMapping:
-            outputBehavior === "derived_multiple" &&
-            multipleSampleMode === "condition_groups"
-              ? conditionContainer === "plate"
-              : undefined,
-          conditionContainer:
-            outputBehavior === "derived_multiple" &&
-            multipleSampleMode === "condition_groups"
-              ? conditionContainer
-              : undefined,
-          outputType: ["derived_one", "derived_multiple"].includes(
-            outputBehavior,
-          )
-            ? canonicalType(outputType)
-            : undefined,
-          outputTypeDisplayName:
-            selectedOutput?.displayName || outputType.trim(),
-          outputRules:
-            outputBehavior === "derived_multi_type"
-              ? normalizedOutputRules
-              : undefined,
-          consumptionPolicy,
+          consumptionPolicy:
+            outputBehavior === "one_to_many"
+              ? consumptionPolicy
+              : outputBehavior === "same_sample"
+                ? "retain"
+                : "consume",
           template,
         });
       }
@@ -407,30 +345,123 @@ export function ProtocolCreationWizard({
             </div>
           ) : (
             <div className="protocol-editor-body flow-form">
-              <label>
-                输入 Sample 类型
-                <input
-                  list="protocol-input-types"
-                  value={inputType}
-                  onChange={(event) => setInputType(event.target.value)}
-                />
-                <datalist id="protocol-input-types">
-                  {sampleTypes.map((item) => (
-                    <option value={item.displayName} key={item.canonicalType}>
-                      {item.canonicalType}
-                    </option>
+              <fieldset className="applicable-input-types">
+                <legend>适用的输入类型</legend>
+                <p className="form-hint">
+                  创建 Record 时只显示这些类型的 Sample；同一条 Record
+                  的多个输入仍必须属于同一种类型。
+                </p>
+                <label className="radio-row input-type-any">
+                  <input
+                    type="checkbox"
+                    checked={allowAnyInputType}
+                    onChange={(event) => {
+                      setAllowAnyInputType(event.target.checked);
+                      if (event.target.checked) setInputTypes([]);
+                    }}
+                  />
+                  不限类型（仅用于冻存、转移等真正通用的操作）
+                </label>
+                {!allowAnyInputType &&
+                  groupSampleTypes([
+                    ...selectableSampleTypes(sampleTypes),
+                    ...customInputTypes,
+                  ]).map((group) => (
+                    <section className="input-type-category" key={group.label}>
+                      <h4>{group.label}</h4>
+                      <div className="input-type-options">
+                        {group.items.map((item) => (
+                          <label key={item.canonicalType}>
+                            <input
+                              type="checkbox"
+                              checked={inputTypes.includes(item.canonicalType)}
+                              onChange={(event) =>
+                                setInputTypes((current) =>
+                                  event.target.checked
+                                    ? [...current, item.canonicalType]
+                                    : current.filter(
+                                        (value) => value !== item.canonicalType,
+                                      ),
+                                )
+                              }
+                            />
+                            <span>{item.displayName}</span>
+                            <code>{item.canonicalType}</code>
+                          </label>
+                        ))}
+                      </div>
+                    </section>
                   ))}
-                </datalist>
-              </label>
+                {!allowAnyInputType && (
+                  <details className="custom-input-type">
+                    <summary>＋ 添加新的通用适用类型</summary>
+                    <p className="form-hint">
+                      仅当现有通用材料类别都不适用时才新增。动物取材 Protocol 的适用输入类型选择 ANIMAL；创建 Record 时输出类型选择 TISSUE，并在自定义名称中填写取材部位。代码须以英文字母开头，只能包含大写字母、数字和下划线。
+                    </p>
+                    <div>
+                      <label>
+                        显示名称
+                        <input
+                          value={customInputName}
+                          placeholder="填写通用类型名称"
+                          onChange={(event) => setCustomInputName(event.target.value)}
+                        />
+                      </label>
+                      <label>
+                        类型代码
+                        <input
+                          value={customInputCode}
+                          placeholder="填写类型代码"
+                          onChange={(event) =>
+                            setCustomInputCode(canonicalType(event.target.value))
+                          }
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => {
+                          const code = canonicalType(customInputCode);
+                          if (!customInputName.trim() || !validSampleType(code)) {
+                            setError("请填写显示名称，并使用有效的类型代码。");
+                            return;
+                          }
+                          if (
+                            [...sampleTypes, ...customInputTypes].some(
+                              (item) => item.canonicalType === code,
+                            )
+                          ) {
+                            setError("这个类型代码已经存在，请直接勾选对应类型。");
+                            return;
+                          }
+                          setCustomInputTypes((current) => [
+                            ...current,
+                            {
+                              canonicalType: code,
+                              displayName: customInputName.trim(),
+                              origin: "user",
+                            },
+                          ]);
+                          setInputTypes((current) => [...current, code]);
+                          setCustomInputCode("");
+                          setCustomInputName("");
+                          setError("");
+                        }}
+                      >
+                        添加并选中
+                      </button>
+                    </div>
+                  </details>
+                )}
+              </fieldset>
               <fieldset>
                 <legend>完成以后</legend>
                 {(
                   [
-                    ["same_sample", "原 Sample 继续"],
-                    ["derived_one", "产生新的 Sample"],
-                    ["derived_multiple", "产生多个 Sample"],
-                    ["derived_multi_type", "产生多种类型的 Sample"],
-                    ["measurement_only", "仅检测，不产生 Sample"],
+                    ["same_sample", "原 Sample 沿用"],
+                    ["one_to_one", "1 → 1：原 Sample 消耗，产生一个新 Sample"],
+                    ["one_to_many", "1 → 多：产生多个新 Sample"],
+                    ["one_to_zero", "1 → 0：原 Sample 消耗，不产生 Sample"],
                   ] as [OutputBehavior, string][]
                 ).map(([value, label]) => (
                   <label className="radio-row" key={value}>
@@ -439,161 +470,16 @@ export function ProtocolCreationWizard({
                       checked={outputBehavior === value}
                       onChange={() => {
                         setOutputBehavior(value);
-                        if (value === "same_sample")
-                          setConsumptionPolicy("retain");
+                        if (value === "same_sample") setConsumptionPolicy("retain");
+                        if (["one_to_one", "one_to_zero"].includes(value))
+                          setConsumptionPolicy("consume");
                       }}
                     />
                     {label}
                   </label>
                 ))}
               </fieldset>
-              {["derived_one", "derived_multiple"].includes(outputBehavior) && (
-                <label>
-                  输出 Sample 类型
-                  <input
-                    list="protocol-output-types"
-                    value={outputType}
-                    onChange={(event) => setOutputType(event.target.value)}
-                  />
-                  <datalist id="protocol-output-types">
-                    {sampleTypes.map((item) => (
-                      <option value={item.displayName} key={item.canonicalType}>
-                        {item.canonicalType}
-                      </option>
-                    ))}
-                  </datalist>
-                </label>
-              )}
-              {outputBehavior === "derived_multiple" && (
-                <fieldset>
-                  <legend>多个 Sample 的关系</legend>
-                  <label className="radio-row">
-                    <input
-                      type="radio"
-                      checked={multipleSampleMode === "identical"}
-                      onChange={() => setMultipleSampleMode("identical")}
-                    />
-                    相同条件，仅填写数量
-                  </label>
-                  <label className="radio-row">
-                    <input
-                      type="radio"
-                      checked={multipleSampleMode === "condition_groups"}
-                      onChange={() => setMultipleSampleMode("condition_groups")}
-                    />
-                    按实验条件分配
-                  </label>
-                  {multipleSampleMode === "condition_groups" && (
-                    <small>
-                      下一步在模块编排中选择独立培养皿等容器，或加入孔板位置映射。
-                    </small>
-                  )}
-                </fieldset>
-              )}
-              {outputBehavior === "derived_multi_type" && (
-                <fieldset className="multi-output-rules">
-                  <legend>每个输入 Sample 的输出</legend>
-                  <p>
-                    每条规则分别设置 Sample 类型和数量；创建 Record
-                    时会对每个输入执行全部规则。
-                  </p>
-                  <div className="multi-output-rule multi-output-rule-head">
-                    <b>Sample 类型</b>
-                    <b>数量</b>
-                    <span />
-                  </div>
-                  {outputRules.map((rule, index) => (
-                    <div className="multi-output-rule" key={index}>
-                      <input
-                        list="protocol-multi-output-types"
-                        aria-label={`第 ${index + 1} 种输出 Sample 类型`}
-                        value={rule.outputType}
-                        onChange={(event) =>
-                          setOutputRules((current) =>
-                            current.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? {
-                                    ...item,
-                                    outputType: event.target.value,
-                                    outputTypeDisplayName: event.target.value,
-                                  }
-                                : item,
-                            ),
-                          )
-                        }
-                      />
-                      <input
-                        type="number"
-                        min="1"
-                        max="96"
-                        aria-label={`第 ${index + 1} 种输出数量`}
-                        value={rule.count}
-                        onChange={(event) =>
-                          setOutputRules((current) =>
-                            current.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? { ...item, count: Number(event.target.value) }
-                                : item,
-                            ),
-                          )
-                        }
-                      />
-                      <button
-                        type="button"
-                        disabled={outputRules.length <= 2}
-                        onClick={() =>
-                          setOutputRules((current) =>
-                            current.filter(
-                              (_, itemIndex) => itemIndex !== index,
-                            ),
-                          )
-                        }
-                      >
-                        删除
-                      </button>
-                    </div>
-                  ))}
-                  <datalist id="protocol-multi-output-types">
-                    {sampleTypes.map((item) => (
-                      <option
-                        value={item.canonicalType}
-                        key={item.canonicalType}
-                      >
-                        {item.displayName}
-                      </option>
-                    ))}
-                  </datalist>
-                  <button
-                    className="secondary add-output-rule"
-                    type="button"
-                    disabled={outputRules.length >= 16}
-                    onClick={() =>
-                      setOutputRules((current) => [
-                        ...current,
-                        {
-                          outputType: "",
-                          outputTypeDisplayName: "",
-                          count: 1,
-                        },
-                      ])
-                    }
-                  >
-                    ＋ 添加输出类型
-                  </button>
-                  <small>
-                    类型代码使用 1–32 位英文字母、数字或下划线，并以字母开头。
-                  </small>
-                  <small>
-                    当前每个输入将产生{" "}
-                    {outputRules.reduce(
-                      (total, rule) => total + (Number(rule.count) || 0),
-                      0,
-                    )}{" "}
-                    个输出 Sample。
-                  </small>
-                </fieldset>
-              )}
-              <fieldset>
+              {outputBehavior === "one_to_many" && <fieldset>
                 <legend>输入 Sample</legend>
                 <label className="radio-row">
                   <input
@@ -611,7 +497,10 @@ export function ProtocolCreationWizard({
                   />
                   视为已转化/消耗
                 </label>
-              </fieldset>
+              </fieldset>}
+              <p className="form-hint">
+                输出 Sample 的类型、名称和处理信息在创建 Record 时逐行填写。
+              </p>
             </div>
           ))}
         {step === 3 && (
@@ -625,34 +514,12 @@ export function ProtocolCreationWizard({
               onFields={setFields}
               lockedKeys={lockedKeys}
               templateSelector={source?.templateSelector}
-              conditionMapping={
-                !source &&
-                outputBehavior === "derived_multiple" &&
-                multipleSampleMode === "condition_groups"
-                  ? {
-                      mode: conditionContainer,
-                      onChange: setConditionContainer,
-                    }
-                  : undefined
-              }
             />
             {!source && (
               <div className="system-field-note">
-                {outputBehavior === "derived_multi_type" && (
-                  <b>
-                    多类型输出：
-                    {outputRules
-                      .map(
-                        (rule) =>
-                          `${canonicalType(rule.outputType)} × ${rule.count}`,
-                      )
-                      .join("、")}
-                    。规则会分别应用到每个输入 Sample。
-                  </b>
-                )}
                 <span>
-                  系统会根据 Sample Flow 处理输出；需要运行时填写数量或条件时，
-                  会自动加入相应字段。这里添加的 Record 字段会与它们合并。
+                  系统按 Sample Flow 处理输入身份和消耗状态；新 Sample
+                  的类型与具体信息会在创建 Record 时填写。这里添加的字段用于记录本次实验过程。
                 </span>
               </div>
             )}

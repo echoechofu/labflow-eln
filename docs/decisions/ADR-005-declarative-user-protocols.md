@@ -10,17 +10,17 @@ Accepted
 
 ## Decision
 
-用户 Protocol 使用三步创建流程：基本信息、Sample Flow、Record Template。Sample Flow 由受限的 `sample_flow_v1` 执行，支持当前 Experiment 的单一声明输入类型、保留/消耗 usage，以及原 Sample 继续、每输入派生一个、每输入派生多个、按条件组派生多个、measurement-only 输出行为。按条件分配可选顺序孔位映射；孔位作为 metadata 保存，不限制输出 Sample 类型。
+用户 Protocol 使用三步创建流程：基本信息、Sample Flow、Record Template。Sample Flow 由受限的 `sample_flow_v1` 执行，支持一种或多种适用输入类型（或显式不限类型），同一 Record 的多个输入保持类型一致，并提供原 Sample 沿用、消耗型 1→1、可保留或消耗的 1→多、消耗型 1→0 四种身份流转。1→1 和 1→多的输出类型及逐个 Sample 信息在创建 Record 时登记；Protocol 首次执行后询问是否保存默认输出类型序列。
 
-Sample 类型通过独立注册表保存；持久化 canonical value 为大写，展示名独立。派生输出默认继承对应父 Sample metadata，并只补充系统 provenance，不要求重新填写 group、stimulus、time，也不把 Record 字段整体复制到 Sample metadata。
+Sample 类型通过独立注册表保存；持久化 canonical value 为大写，展示名独立。材料类型与容器/位置分离，新输出不再使用 PLATE、DISH、WELL，历史 schema 继续兼容。派生输出继承对应父 Sample metadata，并加入每行填写的处理方式、处理时间和其他说明。
 
 用户 Protocol 创建为 v1。修改任一 Protocol 的 Record template 会复制当前 schema、插入新的 user version 并切换 active version；旧 version 和已有 Record snapshot 不改变。内置 catalog 后续同步不能静默替换当前激活的用户版本。
 
 ## Consequences
 
-- 简单材料转化、拆分、继续和 measurement-only Protocol 可由用户创建，无需增加 Rust 名称分支。
+- 简单材料转化、拆分、沿用和消耗 Protocol 可由用户创建，无需增加 Rust 名称分支。
 - 用户不能通过 Protocol 执行 JavaScript、Rust 或 SQL。
-- 用户 Protocol 可按条件组生成多个 Sample，并可选映射顺序孔位；图形化手动选孔、终末检测、专属计算和复杂动态字段仍使用内置能力。
+- 用户 Protocol 可在 Record 中逐行登记不同类型的实际输出；图形化手动选孔、终末检测、专属计算和复杂动态字段仍使用内置能力。
 - 新类型、Protocol 和 version 都保存在 canonical 用户 SQLite 中，与源代码隔离。
 
 ## Alternatives considered

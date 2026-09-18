@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Experiment, Protocol, Task } from "./domain";
+import type { Experiment, Protocol, RecordOutputDraft, Task } from "./domain";
 import {
   dayLabel,
   formatTime,
@@ -9,6 +9,7 @@ import {
 } from "./domain";
 import {
   startTaskRecord,
+  saveProtocolTemplateVersion,
   uid,
   updateTaskStatus,
   type ExternalSampleDraft,
@@ -27,6 +28,27 @@ import type {
   PlateTreatmentGroup,
   SampleConditionGroup,
 } from "./ProtocolLayoutEditors";
+import {
+  groupSampleTypes,
+  validCanonicalSampleType,
+} from "./sampleTypeCatalog";
+
+type OutputRow = Omit<RecordOutputDraft, "sourceInputIndex"> & {
+  id: string;
+  sourceKey: string;
+  isCustomType: boolean;
+};
+
+const makeOutputRow = (sourceKey: string, sampleType = ""): OutputRow => ({
+  id: uid("output-draft"),
+  sourceKey,
+  sampleType,
+  isCustomType: false,
+  displayName: "",
+  treatmentMethod: "",
+  treatmentDuration: "",
+  other: "",
+});
 
 const plateCapacity = (value: unknown) => {
   const text = String(value ?? "");
@@ -95,6 +117,9 @@ export function TaskDrawer({
   const [conditionGroups, setConditionGroups] = useState<
     SampleConditionGroup[]
   >([{ condition: "", dose: "", duration: "", method: "", sampleCount: 1 }]);
+  const [outputRows, setOutputRows] = useState<OutputRow[]>([]);
+  const [pendingDefaultTypes, setPendingDefaultTypes] = useState<string[]>();
+  const outputTypeGroups = groupSampleTypes(sampleTypes);
   const protocolResults = searchProtocols(protocols, protocolQuery);
   const closeProtocolPicker = () => {
     setChoosingProtocol(false);
@@ -158,6 +183,36 @@ export function TaskDrawer({
   const conditionPlateCapacity = mapsConditionsToPlate
     ? plateCapacity(values.plate_format)
     : 0;
+  const recordOutputMode = protocol?.execution?.outputMode;
+  const usesRecordOutputList = ["record_one", "record_many"].includes(
+    recordOutputMode || "",
+  );
+  const outputSourceKeys =
+    inputMode === "existing"
+      ? inputSampleIds
+      : externalSamples.map((_, index) => `external:${index}`);
+  const reconcileOutputRows = (
+    current: OutputRow[],
+    sourceKeys: string[],
+  ) => {
+    if (!usesRecordOutputList) return [];
+    const defaults = protocol?.execution?.defaultOutputTypes?.length
+      ? protocol.execution.defaultOutputTypes
+      : [""];
+    const retained = current.filter((row) => sourceKeys.includes(row.sourceKey));
+    const next = [...retained];
+    sourceKeys.forEach((sourceKey) => {
+      const existing = next.filter((row) => row.sourceKey === sourceKey);
+      if (recordOutputMode === "record_one") {
+        if (!existing.length) next.push(makeOutputRow(sourceKey, defaults[0]));
+      } else if (!existing.length) {
+        defaults.forEach((sampleType) =>
+          next.push(makeOutputRow(sourceKey, sampleType)),
+        );
+      }
+    });
+    return next;
+  };
   const eligibleInputSamples = usesExperimentSampleInput
     ? eligibleRecordInputSamples(
         samples,
@@ -194,13 +249,13 @@ export function TaskDrawer({
       );
       return;
     }
-    setInputSampleIds((current) =>
-      selected
-        ? current.includes(sampleId)
-          ? current
-          : [...current, sampleId]
-        : current.filter((id) => id !== sampleId),
-    );
+    const nextInputIds = selected
+      ? inputSampleIds.includes(sampleId)
+        ? inputSampleIds
+        : [...inputSampleIds, sampleId]
+      : inputSampleIds.filter((id) => id !== sampleId);
+    setInputSampleIds(nextInputIds);
+    setOutputRows((current) => reconcileOutputRows(current, nextInputIds));
     setError("");
   };
   const renderSampleOption = (sample: Store["samples"][number]) => {
@@ -266,6 +321,7 @@ export function TaskDrawer({
       { condition: "", dose: "", duration: "", method: "", sampleCount: 1 },
     ]);
     setPlateGroups([{ factor: "", duration: "", wellCount: 1 }]);
+    setOutputRows([]);
     const inputTypes = (item.execution?.inputTypes || []).map(
       normalizeSampleType,
     );
@@ -298,7 +354,7 @@ export function TaskDrawer({
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   };
-  const start = async () => {
+  const start = async (defaultChoice?: "save" | "skip") => {
     if (!protocol) return;
     if (
       usesExperimentSampleInput &&
@@ -404,6 +460,66 @@ export function TaskDrawer({
       if (!mapsConditionsToPlate && total > 384)
         return setError("每个输入最多产生 384 个按条件分配的 Sample。");
     }
+    if (usesRecordOutputList) {
+      if (outputRows.length === 0 || outputSourceKeys.length === 0)
+        return setError("请为每个输入填写至少一个输出 Sample。");
+      if (outputRows.some((row) => !row.sampleType.trim()))
+        return setError("请填写所有输出 Sample 的类型。");
+      if (
+        outputRows.some(
+          (row) =>
+            row.isCustomType &&
+            (!validCanonicalSampleType(row.sampleType) ||
+              !row.sampleTypeDisplayName?.trim()),
+        )
+      )
+        return setError(
+          "自定义类型需要显示名称，类型代码须以英文字母开头且只能包含大写字母、数字和下划线。",
+        );
+      if (
+        outputRows.some(
+          (row) =>
+            row.isCustomType &&
+            sampleTypes.some(
+              (item) =>
+                normalizeSampleType(item.canonicalType) ===
+                normalizeSampleType(row.sampleType),
+            ),
+        )
+      )
+        return setError("自定义类型代码已经存在，请从分类列表中直接选择。");
+      if (
+        outputSourceKeys.some(
+          (sourceKey) =>
+            !outputRows.some((row) => row.sourceKey === sourceKey),
+        )
+      )
+        return setError("每个输入都需要至少一个输出 Sample。");
+      if (
+        recordOutputMode === "record_one" &&
+        outputSourceKeys.some(
+          (sourceKey) =>
+            outputRows.filter((row) => row.sourceKey === sourceKey).length !== 1,
+        )
+      )
+        return setError("1 → 1 Protocol 要求每个输入恰好产生一个输出 Sample。");
+    }
+    const proposedDefaults = usesRecordOutputList
+      ? outputRows
+          .filter((row) => row.sourceKey === outputSourceKeys[0])
+          .map((row) => normalizeSampleType(row.sampleType))
+      : [];
+    const shouldAskForDefaults =
+      (protocol.origin === "user" ||
+        protocol.activeVersionOrigin === "user") &&
+      usesRecordOutputList &&
+      !protocol.execution?.defaultOutputTypes?.length &&
+      proposedDefaults.length > 0;
+    if (shouldAskForDefaults && defaultChoice === undefined) {
+      setPendingDefaultTypes(proposedDefaults);
+      return;
+    }
+    setPendingDefaultTypes(undefined);
     try {
       let submittedValues = values;
       if (
@@ -421,6 +537,20 @@ export function TaskDrawer({
           condition_groups: JSON.stringify(conditionGroups),
         };
       }
+      const submittedOutputDrafts: RecordOutputDraft[] = usesRecordOutputList
+        ? outputRows.map((row) => ({
+            sourceInputIndex: outputSourceKeys.indexOf(row.sourceKey),
+            sampleType: normalizeSampleType(row.sampleType),
+            sampleTypeDisplayName: row.isCustomType
+              ? row.sampleTypeDisplayName?.trim()
+              : undefined,
+            registerCustomType: row.isCustomType || undefined,
+            displayName: row.displayName?.trim() || undefined,
+            treatmentMethod: row.treatmentMethod?.trim() || undefined,
+            treatmentDuration: row.treatmentDuration?.trim() || undefined,
+            other: row.other?.trim() || undefined,
+          }))
+        : [];
       await startTaskRecord(
         task.id,
         protocol.id,
@@ -448,7 +578,22 @@ export function TaskDrawer({
               },
             }))
           : [],
+        submittedOutputDrafts,
       );
+      if (shouldAskForDefaults && defaultChoice === "save") {
+        try {
+          await saveProtocolTemplateVersion({
+            protocolId: protocol.id,
+            defaultOutputTypes: proposedDefaults,
+            createdAt: new Date().toISOString(),
+          });
+          protocolsChanged();
+        } catch (reason) {
+          window.alert(
+            `Record 已创建，但默认输出组合保存失败：${reason instanceof Error ? reason.message : String(reason)}`,
+          );
+        }
+      }
       changed();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -501,7 +646,9 @@ export function TaskDrawer({
         {error && <p className="form-error">{error}</p>}
         {choosingProtocol && (
           <div className="overlay centered">
-            <div className={`modal ${protocol ? "" : "protocol-search-modal"}`}>
+            <div
+              className={`modal ${protocol ? "record-creation-modal" : "protocol-search-modal"}`}
+            >
               <button
                 className="close"
                 onClick={closeProtocolPicker}
@@ -642,6 +789,9 @@ export function TaskDrawer({
                                 onClick={() => {
                                   setInputMode("external");
                                   setInputSampleIds([]);
+                                  setOutputRows((current) =>
+                                    reconcileOutputRows(current, ["external:0"]),
+                                  );
                                   setError("");
                                 }}
                               >
@@ -654,6 +804,7 @@ export function TaskDrawer({
                                   type="button"
                                   onClick={() => {
                                     setInputMode("existing");
+                                    setOutputRows([]);
                                     setError("");
                                   }}
                                 >
@@ -721,6 +872,13 @@ export function TaskDrawer({
                                         ),
                                       );
                                       setExternalSampleCount(count);
+                                      const sourceKeys = Array.from(
+                                        { length: count },
+                                        (_, index) => `external:${index}`,
+                                      );
+                                      setOutputRows((current) =>
+                                        reconcileOutputRows(current, sourceKeys),
+                                      );
                                       setExternalSamples((current) =>
                                         Array.from(
                                           { length: count },
@@ -813,6 +971,235 @@ export function TaskDrawer({
                       )}
                     </div>
                   ) : null}
+                  {usesRecordOutputList && outputSourceKeys.length > 0 && (
+                    <fieldset className="record-output-list">
+                      <legend>2. 本次实际产生的 Sample</legend>
+                      <p className="form-hint">
+                        一行代表一个真实 Sample。类型描述材料是什么；处理方式和时间记录本次差异。
+                      </p>
+                      {outputSourceKeys.map((sourceKey) => {
+                        const sourceIndex = outputSourceKeys.indexOf(sourceKey);
+                        const source =
+                          inputMode === "existing"
+                            ? samples.find((sample) => sample.id === sourceKey)
+                            : undefined;
+                        const rows = outputRows.filter(
+                          (row) => row.sourceKey === sourceKey,
+                        );
+                        return (
+                          <section className="record-output-source" key={sourceKey}>
+                            <header>
+                              <span>来源 Sample</span>
+                              <b>
+                                {source?.displayName ||
+                                  source?.code ||
+                                  externalSamples[sourceIndex]?.displayName ||
+                                  `Sample ${sourceIndex + 1}`}
+                              </b>
+                            </header>
+                            {rows.map((row) => {
+                              const rowIndex = outputRows.findIndex(
+                                (item) => item.id === row.id,
+                              );
+                              const previous = outputRows[rowIndex - 1];
+                              const update = (change: Partial<OutputRow>) =>
+                                setOutputRows((current) =>
+                                  current.map((item) =>
+                                    item.id === row.id
+                                      ? { ...item, ...change }
+                                      : item,
+                                  ),
+                                );
+                              return (
+                                <div className="record-output-row" key={row.id}>
+                                  <label>
+                                    类型
+                                    <select
+                                      value={
+                                        row.isCustomType
+                                          ? "__CUSTOM__"
+                                          : row.sampleType
+                                      }
+                                      onChange={(event) => {
+                                        if (event.target.value === "__CUSTOM__") {
+                                          update({
+                                            isCustomType: true,
+                                            sampleType: "",
+                                            sampleTypeDisplayName: "",
+                                          });
+                                        } else {
+                                          update({
+                                            isCustomType: false,
+                                            sampleType: event.target.value,
+                                            sampleTypeDisplayName: undefined,
+                                            registerCustomType: undefined,
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      <option value="">请选择</option>
+                                      {outputTypeGroups.map((group) => (
+                                        <optgroup label={group.label} key={group.label}>
+                                          {group.items.map((item) => (
+                                            <option
+                                              value={item.canonicalType}
+                                              key={item.canonicalType}
+                                            >
+                                              {item.displayName} · {item.canonicalType}
+                                            </option>
+                                          ))}
+                                        </optgroup>
+                                      ))}
+                                      <optgroup label="新类型">
+                                        <option value="__CUSTOM__">
+                                          ＋ 新建通用 Sample 类型…
+                                        </option>
+                                      </optgroup>
+                                    </select>
+                                  </label>
+                                  {row.isCustomType && (
+                                    <div className="record-custom-type">
+                                      <p>
+                                        仅当上面的通用材料类别都不适用时才新建类型。如果是动物取材，输出类型选择
+                                        TISSUE，在“自定义名称”中填写取材部位，如骨骼、肺。PLATE、DISH、WELL
+                                        等容器不是 Sample 类型。
+                                      </p>
+                                      <label>
+                                        通用类型名称
+                                        <input
+                                          value={row.sampleTypeDisplayName || ""}
+                                          placeholder="填写通用类型名称"
+                                          onChange={(event) =>
+                                            update({
+                                              sampleTypeDisplayName:
+                                                event.target.value,
+                                            })
+                                          }
+                                        />
+                                      </label>
+                                      <label>
+                                        类型代码
+                                        <input
+                                          value={row.sampleType}
+                                          placeholder="填写类型代码"
+                                          onChange={(event) =>
+                                            update({
+                                              sampleType: normalizeSampleType(
+                                                event.target.value,
+                                              ),
+                                            })
+                                          }
+                                        />
+                                      </label>
+                                      <small>
+                                        1–32 位，以英文字母开头，仅使用大写字母、数字和下划线。
+                                      </small>
+                                    </div>
+                                  )}
+                                  <label>
+                                    自定义名称（可选）
+                                    <input
+                                      value={row.displayName || ""}
+                                      placeholder="留空则自动生成"
+                                      onChange={(event) =>
+                                        update({ displayName: event.target.value })
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    处理方式（可选）
+                                    <input
+                                      value={row.treatmentMethod || ""}
+                                      onChange={(event) =>
+                                        update({
+                                          treatmentMethod: event.target.value,
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    处理时间（可选）
+                                    <input
+                                      value={row.treatmentDuration || ""}
+                                      onChange={(event) =>
+                                        update({
+                                          treatmentDuration: event.target.value,
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                  <label className="record-output-other">
+                                    其他（可选）
+                                    <input
+                                      value={row.other || ""}
+                                      onChange={(event) =>
+                                        update({ other: event.target.value })
+                                      }
+                                    />
+                                  </label>
+                                  <div className="record-output-actions">
+                                    {previous && (
+                                      <button
+                                        type="button"
+                                        className="secondary"
+                                        onClick={() =>
+                                          update({
+                                            sampleType: previous.sampleType,
+                                            sampleTypeDisplayName:
+                                              previous.sampleTypeDisplayName,
+                                            registerCustomType:
+                                              previous.registerCustomType,
+                                            isCustomType: previous.isCustomType,
+                                            treatmentMethod:
+                                              previous.treatmentMethod,
+                                            treatmentDuration:
+                                              previous.treatmentDuration,
+                                            other: previous.other,
+                                          })
+                                        }
+                                      >
+                                        复用上一行
+                                      </button>
+                                    )}
+                                    {recordOutputMode === "record_many" &&
+                                      rows.length > 1 && (
+                                        <button
+                                          type="button"
+                                          className="danger"
+                                          onClick={() =>
+                                            setOutputRows((current) =>
+                                              current.filter(
+                                                (item) => item.id !== row.id,
+                                              ),
+                                            )
+                                          }
+                                        >
+                                          删除
+                                        </button>
+                                      )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            {recordOutputMode === "record_many" && (
+                              <button
+                                type="button"
+                                className="secondary add-record-output"
+                                onClick={() =>
+                                  setOutputRows((current) => [
+                                    ...current,
+                                    makeOutputRow(sourceKey),
+                                  ])
+                                }
+                              >
+                                ＋ 添加输出 Sample
+                              </button>
+                            )}
+                          </section>
+                        );
+                      })}
+                    </fieldset>
+                  )}
                   {protocol.fields?.map((field) => (
                     <ProtocolFields
                       key={field.key}
@@ -849,6 +1236,35 @@ export function TaskDrawer({
                 </>
               )}
             </div>
+          </div>
+        )}
+        {pendingDefaultTypes && (
+          <div className="overlay centered default-output-prompt">
+            <section className="modal" role="dialog" aria-modal="true">
+              <h2>保存为默认预填？</h2>
+              <p>
+                是否将
+                <b>{pendingDefaultTypes.map(sampleTypeLabel).join("、")}</b>
+                保存为“{protocol?.name}”的默认输出类型？以后创建 Record
+                时会自动预填，仍可逐行修改。
+              </p>
+              <div className="default-output-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void start("skip")}
+                >
+                  不保存，直接创建
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => void start("save")}
+                >
+                  保存并创建
+                </button>
+              </div>
+            </section>
           </div>
         )}
         {creatingProtocol && (

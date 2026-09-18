@@ -10,6 +10,7 @@ import type {
   Protocol,
   RecordAttachment,
   RecordItem,
+  RecordOutputDraft,
   Sample,
   SampleTypeDefinition,
   Task,
@@ -121,17 +122,38 @@ export function initialStore(): Store {
     tasks: seedTasks,
     protocols: seedProtocols,
     sampleTypes: [
-      "CELL",
-      "PLATE",
-      "DISH",
-      "WELL",
-      "RNA",
-      "CDNA",
-      "PROTEIN",
-      "SUP",
-    ].map((canonicalType) => ({
+      ["ANIMAL", "动物"],
+      ["CELL", "细胞"],
+      ["TISSUE", "组织"],
+      ["NUCLEI", "细胞核"],
+      ["BACTERIA", "细菌"],
+      ["FUNGI", "真菌"],
+      ["VIRUS", "病毒制备物"],
+      ["ORGANOID", "类器官"],
+      ["SPHEROID", "细胞球"],
+      ["WHOLE_BLOOD", "全血"],
+      ["SERUM", "血清"],
+      ["PLASMA", "血浆"],
+      ["FECES", "粪便"],
+      ["SUP", "上清"],
+      ["FRACTION", "分离组分"],
+      ["DNA", "DNA"],
+      ["RNA", "RNA"],
+      ["CDNA", "cDNA"],
+      ["PLASMID", "质粒"],
+      ["AMPLICON", "扩增产物"],
+      ["LIBRARY", "测序文库"],
+      ["PROTEIN", "蛋白"],
+      ["PEPTIDE", "肽"],
+      ["LIPID", "脂质"],
+      ["METABOLITE", "代谢物"],
+      ["EV", "细胞外囊泡"],
+      ["PLATE", "PLATE"],
+      ["DISH", "DISH"],
+      ["WELL", "WELL"],
+    ].map(([canonicalType, displayName]) => ({
       canonicalType,
-      displayName: canonicalType === "CDNA" ? "cDNA" : canonicalType,
+      displayName,
       origin: "builtin" as const,
     })),
     samples: seedSamples,
@@ -410,6 +432,7 @@ export async function startTaskRecord(
   values: Record<string, string>,
   inputSampleIds: string[] = [],
   externalInputs: ExternalSampleDraft[] = [],
+  outputDrafts: RecordOutputDraft[] = [],
 ) {
   desktopOnly();
   return invoke<Task>("start_task_record", {
@@ -419,6 +442,7 @@ export async function startTaskRecord(
     values,
     inputSampleIds,
     externalInputs,
+    outputDrafts,
   });
 }
 
@@ -438,8 +462,16 @@ export interface UserProtocolDraft {
   fields?: ProtocolField[];
   inputType?: string;
   inputTypeDisplayName?: string;
+  inputTypes?: {
+    canonicalType: string;
+    displayName: string;
+  }[];
+  allowAnyInputType?: boolean;
   outputBehavior?:
     | "same_sample"
+    | "one_to_one"
+    | "one_to_many"
+    | "one_to_zero"
     | "derived_one"
     | "derived_multiple"
     | "derived_multi_type"
@@ -473,6 +505,7 @@ export async function saveProtocolTemplateVersion(request: {
   fields?: ProtocolField[];
   template?: string;
   templateVariants?: Record<string, string>;
+  defaultOutputTypes?: string[];
   createdAt: string;
 }) {
   desktopOnly();

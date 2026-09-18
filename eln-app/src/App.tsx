@@ -8,7 +8,7 @@ import type {
   RecordAttachment,
   Task,
 } from "./domain";
-import { dayLabel, formatTime } from "./domain";
+import { dayLabel, formatTime, sampleTypeLabel } from "./domain";
 import {
   createExportManifest,
   beginRecordPdf,
@@ -982,6 +982,8 @@ const protocolOutputModeLabel: Record<string, string> = {
   per_input_count: "每个输入产生多个相同条件的 Sample",
   per_input_conditions: "按实验条件产生多个 Sample",
   per_input_types: "每个输入产生多种类型的 Sample",
+  record_one: "1 → 1：登记一个新 Sample",
+  record_many: "1 → 多：逐行登记多个新 Sample",
   same_sample: "原 Sample 继续",
   plate_or_dish: "按孔板或培养皿分配",
   plate_wells: "按孔位分配",
@@ -1065,7 +1067,13 @@ function ProtocolViewer({
               <div>
                 <dt>输出类型</dt>
                 <dd>
-                  {execution.outputRules?.length
+                  {["record_one", "record_many"].includes(
+                    execution.outputMode,
+                  )
+                    ? execution.defaultOutputTypes?.length
+                      ? `创建 Record 时填写（默认：${execution.defaultOutputTypes.join("、")}）`
+                      : "创建 Record 时填写"
+                    : execution.outputRules?.length
                     ? execution.outputRules
                         .map((rule) => `${rule.sampleType} × ${rule.count}`)
                         .join("、")
@@ -1966,13 +1974,32 @@ function RecordsPage({
                           ?.code || id}
                       </span>
                     ))}
-                    {record.outputs.map((id) => (
-                      <span className="sample-row output" key={`output-${id}`}>
-                        输出：
-                        {store.samples.find((sample) => sample.id === id)
-                          ?.code || id}
-                      </span>
-                    ))}
+                    {record.outputs.map((id) => {
+                      const sample = store.samples.find((item) => item.id === id);
+                      const details = [
+                        sample?.metadata?.treatment_method
+                          ? `处理方式：${String(sample.metadata.treatment_method)}`
+                          : "",
+                        sample?.metadata?.treatment_duration
+                          ? `处理时间：${String(sample.metadata.treatment_duration)}`
+                          : "",
+                        sample?.metadata?.other
+                          ? `其他：${String(sample.metadata.other)}`
+                          : "",
+                      ].filter(Boolean);
+                      return (
+                        <span className="sample-row output" key={`output-${id}`}>
+                          输出：{sample?.displayName || sample?.code || id}
+                          {sample?.displayName && sample.code
+                            ? `（${sample.code}）`
+                            : ""}
+                          {sample?.type
+                            ? ` · ${sampleTypeLabel(sample.type)}`
+                            : ""}
+                          {details.length ? ` · ${details.join(" · ")}` : ""}
+                        </span>
+                      );
+                    })}
                     {record.results?.map((result) => (
                       <span className="sample-row" key={result.id}>
                         Result：{result.type} ·{" "}

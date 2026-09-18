@@ -125,6 +125,65 @@
   gap: 9px;
   color: var(--ink) !important;
 }
+.applicable-input-types {
+  gap: 14px !important;
+}
+.input-type-any {
+  background: #f8f7ff;
+  border: 1px solid #e3defd;
+  border-radius: 8px;
+  padding: 10px;
+}
+.input-type-category h4 {
+  color: #777286;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  margin: 0 0 7px;
+  text-transform: uppercase;
+}
+.input-type-options {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.input-type-options label {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e7e4ee;
+  border-radius: 8px;
+  display: grid;
+  font-weight: 600;
+  gap: 6px;
+  grid-template-columns: auto 1fr;
+  padding: 8px;
+}
+.input-type-options label:has(input:checked) {
+  background: #f5f3ff;
+  border-color: #9b8eef;
+}
+.input-type-options code {
+  color: #9994aa;
+  font-size: 9px;
+  grid-column: 2;
+}
+.custom-input-type {
+  border-top: 1px solid #ebe8f2;
+  padding-top: 10px;
+}
+.custom-input-type summary {
+  color: #6252d2;
+  cursor: pointer;
+}
+.custom-input-type > div {
+  align-items: end;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 1fr 1fr auto;
+  margin-top: 9px;
+}
+.custom-input-type button {
+  min-height: 41px;
+}
 .flow-choice,
 .plate-mapping-choice {
   display: flex;
@@ -689,6 +748,10 @@
   .field-card-top,
   .field-options-grid,
   .inheritance-summary dl {
+    grid-template-columns: 1fr;
+  }
+  .input-type-options,
+  .custom-input-type > div {
     grid-template-columns: 1fr;
   }
 }

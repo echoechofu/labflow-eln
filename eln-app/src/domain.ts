@@ -54,16 +54,30 @@ export interface ProtocolExecution {
     | "per_input_count"
     | "per_input_conditions"
     | "per_input_types"
+    | "record_one"
+    | "record_many"
     | "same_sample"
     | "plate_or_dish"
     | "plate_wells"
     | "none";
+  defaultOutputTypes?: string[];
   resultTypes?: string[];
   consumptionPolicy?: "consume" | "non_destructive" | "aliquot";
   conditionAllocation?: {
     plateMapping?: boolean;
     containerMode?: "independent" | "plate" | "dish";
   };
+}
+
+export interface RecordOutputDraft {
+  sourceInputIndex: number;
+  sampleType: string;
+  sampleTypeDisplayName?: string;
+  registerCustomType?: boolean;
+  displayName?: string;
+  treatmentMethod?: string;
+  treatmentDuration?: string;
+  other?: string;
 }
 export interface ProtocolOutputRule {
   sampleType: string;

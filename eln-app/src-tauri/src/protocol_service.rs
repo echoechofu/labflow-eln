@@ -317,6 +317,61 @@ fn register_sample_type(
     Ok(())
 }
 
+fn requested_input_types(request: &Value) -> Result<Vec<(String, String)>, ProtocolServiceError> {
+    let allow_any = request
+        .get("allowAnyInputType")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(values) = request.get("inputTypes") {
+        let values = values.as_array().ok_or_else(|| {
+            ProtocolServiceError::Validation("inputTypes must be an array".into())
+        })?;
+        if allow_any {
+            if !values.is_empty() {
+                return Err(ProtocolServiceError::Validation(
+                    "An unrestricted Protocol cannot also list input types".into(),
+                ));
+            }
+            return Ok(Vec::new());
+        }
+        if !(1..=16).contains(&values.len()) {
+            return Err(ProtocolServiceError::Validation(
+                "Applicable input types must contain 1–16 entries".into(),
+            ));
+        }
+        let mut seen = HashSet::new();
+        return values
+            .iter()
+            .map(|value| {
+                let canonical = canonical_sample_type(&require_string(value, "canonicalType")?)?;
+                if !seen.insert(canonical.clone()) {
+                    return Err(ProtocolServiceError::Validation(
+                        "Applicable input types cannot contain duplicates".into(),
+                    ));
+                }
+                let display = require_string(value, "displayName")?;
+                if display.chars().count() > 64 {
+                    return Err(ProtocolServiceError::Validation(
+                        "Input type display name must be 1–64 characters".into(),
+                    ));
+                }
+                Ok((canonical, display))
+            })
+            .collect();
+    }
+    if allow_any {
+        return Ok(Vec::new());
+    }
+    let canonical = canonical_sample_type(&require_string(request, "inputType")?)?;
+    let display = request
+        .get("inputTypeDisplayName")
+        .and_then(Value::as_str)
+        .unwrap_or(&canonical)
+        .trim()
+        .to_string();
+    Ok(vec![(canonical, display)])
+}
+
 /// One Protocol row, joined with the schema of its currently-active version.
 #[derive(Debug, Clone)]
 pub struct ProtocolView {
@@ -527,12 +582,7 @@ pub fn save_user_protocol(
         return Ok(SavedProtocol { id, version: 1 });
     }
 
-    let input_type = canonical_sample_type(&require_string(&request, "inputType")?)?;
-    let input_display = request
-        .get("inputTypeDisplayName")
-        .and_then(Value::as_str)
-        .unwrap_or(&input_type)
-        .trim();
+    let input_types = requested_input_types(&request)?;
     let output_behavior = require_string(&request, "outputBehavior")?;
     let multiple_sample_mode = request
         .get("multipleSampleMode")
@@ -575,6 +625,10 @@ pub fn save_user_protocol(
     }
     let output_mode = match output_behavior.as_str() {
         "same_sample" => "same_sample",
+        "one_to_one" => "record_one",
+        "one_to_many" => "record_many",
+        "one_to_zero" => "none",
+        // Legacy request values remain accepted for existing MCP clients.
         "derived_one" => "per_input",
         "derived_multiple" if multiple_sample_mode == "condition_groups" => "per_input_conditions",
         "derived_multiple" => "per_input_count",
@@ -595,6 +649,18 @@ pub fn save_user_protocol(
             ));
         }
     };
+    if matches!(output_behavior.as_str(), "one_to_one" | "one_to_zero")
+        && consumption_policy != "consume"
+    {
+        return Err(ProtocolServiceError::Validation(
+            "1→1 and 1→0 Protocols must consume their input Samples".into(),
+        ));
+    }
+    if output_behavior == "same_sample" && consumption_policy != "non_destructive" {
+        return Err(ProtocolServiceError::Validation(
+            "An unchanged Sample must be retained".into(),
+        ));
+    }
     if output_mode == "same_sample" && consumption_policy == "consume" {
         return Err(ProtocolServiceError::Validation(
             "A consumed Sample cannot continue as the output".into(),
@@ -653,7 +719,8 @@ pub fn save_user_protocol(
         "eventType":format!("custom:{id}"),
         "inputSource":"experiment_samples",
         "inputCardinality":"many",
-        "inputTypes":[input_type],
+        "inputTypes":input_types.iter().map(|(canonical, _)| canonical).collect::<Vec<_>>(),
+        "inputTypePolicy":"uniform",
         "outputMode":output_mode,
         "consumptionPolicy":consumption_policy,
         "metadataPolicy":"inherit_parent"
@@ -676,7 +743,7 @@ pub fn save_user_protocol(
     let spec = json!({
         "schemaVersion":1,
         "userDefined":true,
-        "blocks":["选择输入 Sample", "按模板记录实验过程", match output_mode { "same_sample" => "原 Sample 继续", "per_input" => "每个输入产生一个新 Sample", "per_input_count" => "每个输入产生多个相同条件的 Sample", "per_input_conditions" => "按实验条件产生多个 Sample", "per_input_types" => "每个输入产生多种类型的 Sample", _ => "仅记录检测，不产生 Sample" }],
+        "blocks":["选择输入 Sample", "按模板记录实验过程", match output_mode { "same_sample" => "原 Sample 沿用", "record_one" => "逐个登记一个新 Sample", "record_many" => "逐行登记多个新 Sample", "per_input" => "每个输入产生一个新 Sample", "per_input_count" => "每个输入产生多个相同条件的 Sample", "per_input_conditions" => "按实验条件产生多个 Sample", "per_input_types" => "每个输入产生多种类型的 Sample", _ => "消耗输入且不产生 Sample" }],
         "fields":fields,
         "template":template,
         "execution":execution
@@ -693,7 +760,9 @@ pub fn save_user_protocol(
             "Protocol id already exists".into(),
         ));
     }
-    register_sample_type(&tx, &input_type, input_display, &created_at)?;
+    for (canonical, display_name) in &input_types {
+        register_sample_type(&tx, canonical, display_name, &created_at)?;
+    }
     if let Some(output_type) = &output_type {
         let output_display = request
             .get("outputTypeDisplayName")
@@ -794,6 +863,59 @@ pub fn save_protocol_template_version(
         spec["fields"] = Value::Array(fields);
     }
     apply_template_overrides(&mut spec, &request)?;
+    if let Some(defaults) = request
+        .get("defaultOutputTypes")
+        .filter(|value| !value.is_null())
+    {
+        let defaults = defaults.as_array().ok_or_else(|| {
+            ProtocolServiceError::Validation("defaultOutputTypes must be an array".into())
+        })?;
+        if !matches!(
+            spec.pointer("/execution/outputMode")
+                .and_then(Value::as_str),
+            Some("record_one" | "record_many")
+        ) {
+            return Err(ProtocolServiceError::Validation(
+                "Output defaults are only supported for Record-defined outputs".into(),
+            ));
+        }
+        let normalized = defaults
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| {
+                        ProtocolServiceError::Validation("Default output type must be text".into())
+                    })
+                    .and_then(canonical_sample_type)
+                    .map(Value::String)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if normalized
+            .iter()
+            .any(|value| matches!(value.as_str(), Some("PLATE" | "DISH" | "WELL" | "OTHER")))
+        {
+            return Err(ProtocolServiceError::Validation(
+                "PLATE, DISH, WELL, and OTHER cannot be default output material types".into(),
+            ));
+        }
+        if normalized.is_empty() || normalized.len() > 96 {
+            return Err(ProtocolServiceError::Validation(
+                "Default output types must contain 1–96 entries".into(),
+            ));
+        }
+        if spec
+            .pointer("/execution/outputMode")
+            .and_then(Value::as_str)
+            == Some("record_one")
+            && normalized.len() != 1
+        {
+            return Err(ProtocolServiceError::Validation(
+                "1→1 Protocols require exactly one default output type".into(),
+            ));
+        }
+        spec["execution"]["defaultOutputTypes"] = Value::Array(normalized);
+    }
     validate_schema(&spec)?;
 
     let tx = connection.transaction()?;
@@ -896,7 +1018,7 @@ mod tests {
             .unwrap();
         connection
             .execute(
-                "INSERT INTO sample_types VALUES ('TISSUE','Tissue','user','now',NULL)",
+                "INSERT INTO sample_types VALUES ('CUSTOM_TISSUE','Custom tissue','user','now',NULL)",
                 [],
             )
             .unwrap();
@@ -914,7 +1036,7 @@ mod tests {
             .unwrap();
         let sample_type: i64 = connection
             .query_row(
-                "SELECT count(*) FROM sample_types WHERE canonical_type='TISSUE'",
+                "SELECT count(*) FROM sample_types WHERE canonical_type='CUSTOM_TISSUE'",
                 [],
                 |row| row.get(0),
             )
@@ -1015,6 +1137,93 @@ mod tests {
         let views = list_protocols(&connection).unwrap();
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].id, "p1");
+    }
+
+    #[test]
+    fn record_defined_flows_fix_identity_and_defer_output_types() {
+        let mut connection = fresh();
+        for (id, behavior, policy, expected_mode) in [
+            ("continue", "same_sample", "retain", "same_sample"),
+            ("convert", "one_to_one", "consume", "record_one"),
+            ("split", "one_to_many", "retain", "record_many"),
+            ("consume", "one_to_zero", "consume", "none"),
+        ] {
+            save_user_protocol(
+                &mut connection,
+                json!({
+                    "id":id,"name":id,"description":"d",
+                    "inputType":"ANIMAL","inputTypeDisplayName":"动物",
+                    "outputBehavior":behavior,"consumptionPolicy":policy,
+                    "template":"{{input_sample_summary}} -> {{output_sample_summary}}",
+                    "createdAt":"2026-09-18T09:00:00"
+                }),
+            )
+            .unwrap();
+            let view = get_protocol(&connection, id).unwrap().unwrap();
+            assert_eq!(view.spec["execution"]["outputMode"], expected_mode);
+            assert!(view.spec["execution"].get("outputType").is_none());
+        }
+
+        let invalid = save_user_protocol(
+            &mut connection,
+            json!({
+                "id":"invalid","name":"invalid","description":"d",
+                "inputType":"ANIMAL","outputBehavior":"one_to_one",
+                "consumptionPolicy":"retain","template":"body","createdAt":"now"
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(invalid.code(), "validation_error");
+
+        let saved = save_protocol_template_version(
+            &mut connection,
+            json!({
+                "protocolId":"split",
+                "defaultOutputTypes":["tissue","NUCLEI","TISSUE"],
+                "createdAt":"2026-09-18T10:00:00"
+            }),
+        )
+        .unwrap();
+        assert_eq!(saved.version, 2);
+        let updated = get_protocol(&connection, "split").unwrap().unwrap();
+        assert_eq!(
+            updated.spec["execution"]["defaultOutputTypes"],
+            json!(["TISSUE", "NUCLEI", "TISSUE"])
+        );
+
+        save_user_protocol(
+            &mut connection,
+            json!({
+                "id":"multi-input","name":"multi-input","description":"d",
+                "inputTypes":[
+                    {"canonicalType":"CELL","displayName":"细胞"},
+                    {"canonicalType":"ORGANOID","displayName":"类器官"}
+                ],
+                "allowAnyInputType":false,
+                "outputBehavior":"same_sample","consumptionPolicy":"retain",
+                "template":"body","createdAt":"now"
+            }),
+        )
+        .unwrap();
+        let multi = get_protocol(&connection, "multi-input").unwrap().unwrap();
+        assert_eq!(
+            multi.spec["execution"]["inputTypes"],
+            json!(["CELL", "ORGANOID"])
+        );
+        assert_eq!(multi.spec["execution"]["inputTypePolicy"], "uniform");
+
+        save_user_protocol(
+            &mut connection,
+            json!({
+                "id":"any-input","name":"any-input","description":"d",
+                "inputTypes":[],"allowAnyInputType":true,
+                "outputBehavior":"same_sample","consumptionPolicy":"retain",
+                "template":"body","createdAt":"now"
+            }),
+        )
+        .unwrap();
+        let any = get_protocol(&connection, "any-input").unwrap().unwrap();
+        assert_eq!(any.spec["execution"]["inputTypes"], json!([]));
     }
 
     #[test]

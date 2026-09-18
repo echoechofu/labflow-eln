@@ -485,20 +485,47 @@ fn apply_schema(connection: &Connection) -> Result<(), String> {
         .execute("UPDATE samples SET sample_type=upper(sample_type)", [])
         .map_err(|error| error.to_string())?;
     for (canonical_type, display_name) in [
-        ("CELL", "CELL"),
+        ("ANIMAL", "动物"),
+        ("CELL", "细胞"),
+        ("TISSUE", "组织"),
+        ("NUCLEI", "细胞核"),
+        ("BACTERIA", "细菌"),
+        ("FUNGI", "真菌"),
+        ("VIRUS", "病毒制备物"),
+        ("ORGANOID", "类器官"),
+        ("SPHEROID", "细胞球"),
+        ("WHOLE_BLOOD", "全血"),
+        ("SERUM", "血清"),
+        ("PLASMA", "血浆"),
+        ("FECES", "粪便"),
+        ("SUP", "上清"),
+        ("FRACTION", "分离组分"),
+        ("DNA", "DNA"),
+        ("RNA", "RNA"),
+        ("CDNA", "cDNA"),
+        ("PLASMID", "质粒"),
+        ("AMPLICON", "扩增产物"),
+        ("LIBRARY", "测序文库"),
+        ("PROTEIN", "蛋白"),
+        ("PEPTIDE", "肽"),
+        ("LIPID", "脂质"),
+        ("METABOLITE", "代谢物"),
+        ("EV", "细胞外囊泡"),
+        // Legacy container-shaped Sample types remain registered so old
+        // Protocols and Records continue to load. New output lists hide them.
         ("PLATE", "PLATE"),
         ("DISH", "DISH"),
         ("WELL", "WELL"),
-        ("RNA", "RNA"),
-        ("CDNA", "cDNA"),
-        ("PROTEIN", "PROTEIN"),
-        ("SUP", "SUP"),
     ] {
         connection.execute(
-            "INSERT OR IGNORE INTO sample_types (canonical_type,display_name,origin,created_at) VALUES (?1,?2,'builtin',datetime('now'))",
+            "INSERT INTO sample_types (canonical_type,display_name,origin,created_at) VALUES (?1,?2,'builtin',datetime('now')) ON CONFLICT(canonical_type) DO UPDATE SET display_name=excluded.display_name WHERE sample_types.origin='builtin'",
             params![canonical_type, display_name],
         ).map_err(|error| error.to_string())?;
     }
+    connection.execute(
+        "UPDATE sample_types SET archived_at=coalesce(archived_at,datetime('now')) WHERE canonical_type='OTHER' AND origin='builtin'",
+        [],
+    ).map_err(|error| error.to_string())?;
     connection.execute("INSERT OR IGNORE INTO sample_types (canonical_type,display_name,origin,created_at) SELECT DISTINCT upper(sample_type), upper(sample_type), 'user', datetime('now') FROM samples", []).map_err(|error| error.to_string())?;
     connection.execute_batch("UPDATE samples SET origin='external' WHERE id IN (SELECT output.sample_id FROM process_events event JOIN event_outputs output ON output.event_id=event.id WHERE event.provenance='user_imported'); UPDATE samples SET origin='external' WHERE source_record_id IS NULL AND parent_sample_id IS NULL AND NOT EXISTS (SELECT 1 FROM event_outputs output JOIN process_events event ON event.id=output.event_id WHERE output.sample_id=samples.id AND event.provenance='labflow_recorded');").map_err(|error| error.to_string())?;
     connection.execute_batch("UPDATE samples SET lineage_status='partial' WHERE id IN (SELECT eo.sample_id FROM process_events event JOIN event_outputs eo ON eo.event_id=event.id JOIN samples output ON output.id=eo.sample_id WHERE (event.event_type IN ('passage','plating') AND NOT EXISTS (SELECT 1 FROM event_inputs WHERE event_id=event.id)) OR (event.event_type='treatment' AND upper(output.sample_type)='WELL' AND NOT EXISTS (SELECT 1 FROM event_inputs input JOIN samples source ON source.id=input.sample_id WHERE input.event_id=event.id AND upper(source.sample_type)='PLATE')));").map_err(|error| error.to_string())?;
@@ -1416,6 +1443,7 @@ fn start_task_record(
     values: Value,
     input_sample_ids: Vec<String>,
     external_inputs: Vec<Value>,
+    output_drafts: Vec<Value>,
 ) -> Result<Value, String> {
     let mut conn = state
         .0
@@ -1429,6 +1457,7 @@ fn start_task_record(
         values,
         input_sample_ids,
         external_inputs,
+        output_drafts,
     )
     .map(|result| result.task)
     .map_err(|error| error.to_string())
@@ -2310,6 +2339,17 @@ mod tests {
         apply_schema(&connection).unwrap();
         let table_count: i64 = connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('experiments','tasks','protocols','records','samples','sample_types','attachments','export_manifests','assay_items','assay_plates','assay_well_mappings','assay_raw_imports','assay_raw_measurements')", [], |row| row.get(0)).unwrap();
         assert_eq!(table_count, 13);
+        let catalog: (i64, i64, i64) = connection
+            .query_row(
+                "SELECT count(*),
+                        sum(CASE WHEN canonical_type='NUCLEI' THEN 1 ELSE 0 END),
+                        sum(CASE WHEN canonical_type IN ('LYSATE','HOMOGENATE','EXTRACT') THEN 1 ELSE 0 END)
+                 FROM sample_types WHERE origin='builtin'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(catalog, (29, 1, 0));
         drop(connection);
         fs::remove_file(path).unwrap();
     }

@@ -85,10 +85,10 @@ The same bootstrap applies any time the agent is about to write a Task,
 Record, or anything else that depends on an `experiment_id` — always check
 `labflow_list_experiments` first.
 
-## Determining input sample type before `labflow_create_protocol`
+## Determining applicable input sample types before `labflow_create_protocol`
 
 Before calling `labflow_create_protocol`, the agent must reason about the
-**canonical input sample type** and obtain explicit user confirmation. Never
+**applicable canonical input sample types** and obtain explicit user confirmation. Never
 default to whatever literal name appears in the protocol body (e.g. seeing
 "96 孔板" does **not** mean the input type is `PLATE`).
 
@@ -103,23 +103,27 @@ Required workflow:
    each with a one-sentence reason it could fit. Do **not** embed builtin
    examples or sample ids in this list — keep the candidate set focused on
    the proposed Protocol only.
-3. Show the user the candidates and your recommended pick. Ask which one
-   they want before any MCP call.
-4. Only after the user confirms the canonical type, build the request and
+3. Show the user the candidates and your recommended pick. Ask whether the
+   Protocol accepts one, several, or genuinely any material type before any MCP call.
+4. Only after the user confirms the applicable types, build the request and
    call `labflow_create_protocol`.
-5. Persist the confirmed canonical type in your reasoning trail so future
+5. Persist the confirmed canonical types in your reasoning trail so future
    versions of the same Protocol stay consistent unless the user revisits
    this step.
 
 Hard rules:
 
 - Never let the literal name of a piece of equipment decide the input type.
-- Never re-use the input type of an existing Protocol just because it looks
+- Never re-use the input types of an existing Protocol just because it looks
   similar; re-do the reasoning per Protocol.
-- Never combine a literal container name (plate / dish / tube) with a
-  derived Sample type (RNA / CDNA / etc.) in the same protocol —
-  `outputBehavior: per_input` / `per_input_count` is the path for derived
-  Samples.
+- Never use a container name (plate / dish / tube) as the material type for
+  a new user Protocol. Containers and positions are Sample metadata. For new
+  derived materials choose `one_to_one` or `one_to_many`; the actual output
+  types and per-Sample details are entered when the Record is created.
+- Keep Sample types at the reusable material-class level. Lung, liver, nasal
+  mucosa, and other anatomical sites use `TISSUE`; put the specific site in
+  the output Sample name or Record metadata. Only propose a new type when no
+  existing general material class fits.
 
 ## Module composition
 
@@ -152,8 +156,8 @@ UI's Tauri commands — no duplication, no shortcuts.
 ### Protocol module
 - `labflow_list_protocols` — every Protocol template (built-in and user-defined) with the active version's schema summary.
 - `labflow_get_protocol`
-- `labflow_create_protocol` — user-defined Protocol at version 1; validates the template body and registers new input/output Sample types.
-- `labflow_save_protocol_version` — appends a schema version and promotes it to active.
+- `labflow_create_protocol` — user-defined Protocol at version 1; validates the template body, registers its applicable input types (or explicitly accepts any type), and fixes one of four identity flows (`same_sample`, `one_to_one`, `one_to_many`, `one_to_zero`).
+- `labflow_save_protocol_version` — appends a schema version and promotes it to active; Record-defined flows may also save a default output type sequence.
 - `labflow_delete_protocol` — permanently deletes a user-defined Protocol and all template versions. Built-ins are protected; complete historical Record snapshots and registered Sample types are retained.
 
 Before `labflow_delete_protocol`, resolve the exact Protocol with

@@ -36,10 +36,10 @@ LabFlow is a local-first laboratory experiment management system and electronic 
 | Workflow | What LabFlow supports |
 | --- | --- |
 | Experiment calendar | 创建、编辑、关联和完成实验 Task；按周查看实验安排 |
-| Protocol builder | 定义 Sample Flow、相同条件的多个输出，或按条件/剂量/时间分组输出 |
+| Protocol builder | 定义原 Sample 沿用、1→1、1→多或1→0；输出类型与具体信息在 Record 中逐行登记 |
 | Record | 从 Protocol 创建带版本快照的实验记录，编辑正文并插入实验图片 |
-| Sample flow | CELL、PLATE、DISH、WELL、RNA、cDNA、PROTEIN、SUP 及自定义 Sample 类型 |
-| Plate conditions | 条件分配可选映射孔板位置；Sample 类型与孔位互不绑定 |
+| Sample flow | 面向细胞、动物和微生物基础实验的材料类型目录，并支持自定义类型 |
+| Containers | 孔板、培养皿和孔位作为容器/位置信息；旧 PLATE、DISH、WELL 数据继续兼容 |
 | Terminal assays | qPCR、ELISA、CCK-8 的 Plate Mapping 与 Raw Data 保存骨架 |
 | Export and backup | 系统打印、低内存 PDF、低内存 PDF＋全部附件 ZIP，以及完整工作区备份 |
 

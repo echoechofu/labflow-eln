@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, Transaction};
 use serde_json::{json, Map, Value};
+use std::collections::HashSet;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -328,6 +329,7 @@ pub fn execute(
         values,
         supplied_inputs,
         Vec::new(),
+        Vec::new(),
     )
 }
 
@@ -339,6 +341,7 @@ pub fn execute_with_external(
     values: Value,
     supplied_inputs: Vec<String>,
     external_inputs: Vec<Value>,
+    output_drafts: Vec<Value>,
 ) -> Result<ExecutionResult, String> {
     let tx = connection
         .transaction()
@@ -585,7 +588,14 @@ pub fn execute_with_external(
         None
     };
     let event_id = format!("event-{record_id}");
-    tx.execute("INSERT INTO process_events (id,experiment_id,record_id,event_type,occurred_at,parameters_json,provenance,created_at) VALUES (?1,?2,?3,?4,?5,?6,'labflow_recorded',?5)", params![event_id,experiment_id,record_id,event_type,task_date,values.to_string()]).map_err(|error| error.to_string())?;
+    let mut event_parameters = values.as_object().cloned().unwrap_or_default();
+    if !output_drafts.is_empty() {
+        event_parameters.insert(
+            "record_output_drafts".into(),
+            Value::Array(output_drafts.clone()),
+        );
+    }
+    tx.execute("INSERT INTO process_events (id,experiment_id,record_id,event_type,occurred_at,parameters_json,provenance,created_at) VALUES (?1,?2,?3,?4,?5,?6,'labflow_recorded',?5)", params![event_id,experiment_id,record_id,event_type,task_date,Value::Object(event_parameters).to_string()]).map_err(|error| error.to_string())?;
     for id in &input_ids {
         tx.execute(
             "INSERT INTO event_inputs VALUES (?1,?2)",
@@ -632,6 +642,115 @@ pub fn execute_with_external(
     }
     let mut output_conditions = Vec::new();
     let mut plate_output_assignments = Vec::new();
+    let mut record_output_metadata = Vec::new();
+    let record_defined_outputs = if matches!(output_mode, "record_one" | "record_many") {
+        if output_drafts.is_empty() {
+            return Err("Add at least one output Sample".into());
+        }
+        if output_drafts.len() > 384 {
+            return Err("A Record can create at most 384 output Samples".into());
+        }
+        let mut per_input_counts = vec![0_usize; input_ids.len()];
+        let mut custom_types_registered = HashSet::new();
+        let mut outputs = Vec::with_capacity(output_drafts.len());
+        for draft in &output_drafts {
+            let source_index = draft
+                .get("sourceInputIndex")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|index| *index < input_ids.len())
+                .ok_or("Each output Sample must reference one selected input")?;
+            let sample_type = string_value(draft, "sampleType")
+                .map(canonical_sample_type)
+                .ok_or("Each output Sample requires a type")?;
+            if sample_type.is_empty()
+                || sample_type.len() > 32
+                || !sample_type.chars().enumerate().all(|(index, character)| {
+                    character.is_ascii_uppercase()
+                        || character.is_ascii_digit() && index > 0
+                        || character == '_' && index > 0
+                })
+            {
+                return Err(
+                    "Output Sample type must use 1–32 letters, numbers, or underscores".into(),
+                );
+            }
+            if matches!(sample_type.as_str(), "PLATE" | "DISH" | "WELL" | "OTHER") {
+                return Err(
+                    "Choose a specific material type; PLATE, DISH, WELL, and OTHER cannot be new output types"
+                        .into(),
+                );
+            }
+            let registered: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sample_types WHERE canonical_type=?1 AND archived_at IS NULL)",
+                    [&sample_type],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if !registered {
+                if draft.get("registerCustomType").and_then(Value::as_bool) != Some(true) {
+                    return Err(format!("Sample type {sample_type} is not registered"));
+                }
+                let display_name = string_value(draft, "sampleTypeDisplayName")
+                    .filter(|value| value.chars().count() <= 64)
+                    .ok_or("A custom Sample type requires a 1–64 character display name")?;
+                tx.execute(
+                    "INSERT INTO sample_types (canonical_type,display_name,origin,created_at) VALUES (?1,?2,'user',?3)",
+                    params![sample_type, display_name, task_date],
+                )
+                .map_err(|error| error.to_string())?;
+                custom_types_registered.insert(sample_type.clone());
+            } else if draft.get("registerCustomType").and_then(Value::as_bool) == Some(true)
+                && !custom_types_registered.contains(&sample_type)
+            {
+                return Err(format!(
+                    "Sample type {sample_type} already exists; select it from the registered catalog"
+                ));
+            }
+            let parent_id = input_ids[source_index].clone();
+            let parent_label: String = tx
+                .query_row(
+                    "SELECT coalesce(display_name,sample_code) FROM samples WHERE id=?1",
+                    [&parent_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            let label = string_value(draft, "displayName")
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    format!(
+                        "{parent_label} · {sample_type} {}",
+                        per_input_counts[source_index] + 1
+                    )
+                });
+            let mut metadata = Map::new();
+            for (request_key, metadata_key) in [
+                ("treatmentMethod", "treatment_method"),
+                ("treatmentDuration", "treatment_duration"),
+                ("other", "other"),
+            ] {
+                if let Some(value) = string_value(draft, request_key) {
+                    metadata.insert(metadata_key.into(), json!(value));
+                }
+            }
+            per_input_counts[source_index] += 1;
+            outputs.push((sample_type, label, Some(parent_id)));
+            record_output_metadata.push(metadata);
+        }
+        if per_input_counts.iter().any(|count| *count == 0) {
+            return Err("Each selected input must have at least one output Sample".into());
+        }
+        if output_mode == "record_one" && per_input_counts.iter().any(|count| *count != 1) {
+            return Err("1→1 Protocols require exactly one output for each input".into());
+        }
+        Some(outputs)
+    } else {
+        if !output_drafts.is_empty() {
+            return Err("This Protocol does not accept a Record-defined output list".into());
+        }
+        None
+    };
     let multi_type_outputs = if output_mode == "per_input_types" {
         let rules = execution
             .get("outputRules")
@@ -828,15 +947,19 @@ pub fn execute_with_external(
             "same_sample" => ("", Vec::new(), Vec::new()),
             "none" => ("", Vec::new(), Vec::new()),
             "per_input_types" => ("", Vec::new(), Vec::new()),
+            "record_one" => ("", Vec::new(), Vec::new()),
+            "record_many" => ("", Vec::new(), Vec::new()),
             _ => return Err("Unsupported Protocol output mode".into()),
         };
-    let output_specs = multi_type_outputs.unwrap_or_else(|| {
-        output_labels
-            .into_iter()
-            .zip(output_parents)
-            .map(|(label, parent)| (output_type.to_string(), label, parent))
-            .collect::<Vec<_>>()
-    });
+    let output_specs = record_defined_outputs
+        .or(multi_type_outputs)
+        .unwrap_or_else(|| {
+            output_labels
+                .into_iter()
+                .zip(output_parents)
+                .map(|(label, parent)| (output_type.to_string(), label, parent))
+                .collect::<Vec<_>>()
+        });
     let output_types = output_specs
         .iter()
         .map(|(sample_type, _, _)| sample_type.as_str())
@@ -876,8 +999,16 @@ pub fn execute_with_external(
         } else {
             Map::new()
         };
+        if matches!(output_mode, "record_one" | "record_many") {
+            for key in ["treatment_method", "treatment_duration", "other"] {
+                metadata.remove(key);
+            }
+        }
         if execution.get("engine").and_then(Value::as_str) != Some("sample_flow_v1") {
             metadata.extend(values.as_object().cloned().unwrap_or_else(Map::new));
+        }
+        if let Some(output_metadata) = record_output_metadata.get(index) {
+            metadata.extend(output_metadata.clone());
         }
         if let Some(assignment) = output_conditions.get(index) {
             metadata.insert("condition".into(), json!(assignment.condition));
@@ -994,8 +1125,35 @@ pub fn execute_with_external(
     let output_summary = output_ids
         .iter()
         .map(|id| {
-            tx.query_row("SELECT sample_code FROM samples WHERE id=?1", [id], |row| {
-                row.get::<_, String>(0)
+            tx.query_row(
+                "SELECT sample_code,coalesce(display_name,''),sample_type,metadata_json FROM samples WHERE id=?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .map(|(code, display_name, sample_type, metadata_json)| {
+                let metadata: Value = serde_json::from_str(&metadata_json).unwrap_or(json!({}));
+                let mut details = Vec::new();
+                if !display_name.is_empty() && display_name != code {
+                    details.push(display_name);
+                }
+                details.push(sample_type);
+                for (key, label) in [
+                    ("treatment_method", "处理方式"),
+                    ("treatment_duration", "处理时间"),
+                    ("other", "其他"),
+                ] {
+                    if let Some(value) = metadata.get(key).and_then(Value::as_str) {
+                        details.push(format!("{label}：{value}"));
+                    }
+                }
+                format!("{code}（{}）", details.join("；"))
             })
             .map_err(|error| error.to_string())
         })
@@ -1019,7 +1177,7 @@ pub fn execute_with_external(
         .map_err(|error| error.to_string())?;
         result_ids.push(id);
     }
-    let data = json!({"title":title,"notes":"","inputs":input_ids,"outputs":output_ids,"results":result_ids,"values":values,"renderedContent":rendered});
+    let data = json!({"title":title,"notes":"","inputs":input_ids,"outputs":output_ids,"results":result_ids,"values":values,"outputDetails":output_drafts,"renderedContent":rendered});
     tx.execute(
         "UPDATE records SET current_data_json=?2 WHERE id=?1",
         params![record_id, data.to_string()],
@@ -1836,6 +1994,7 @@ mod tests {
                 json!({"sampleType":"CELL","displayName":"siNC","metadata":{"existing_conditions":"siNC, 24 h"}}),
                 json!({"sampleType":"CELL","displayName":"siARH","metadata":{"existing_conditions":"siARH, 24 h"}}),
             ],
+            vec![],
         )
         .unwrap();
 
@@ -1904,6 +2063,7 @@ mod tests {
             json!({"resuspension_volume":"20","storage":"立即逆转录"}),
             vec![],
             vec![json!({"sampleType":"RNA","displayName":"Wrong type"})],
+            vec![],
         )
         .unwrap_err();
         assert!(error.contains("does not accept RNA"));
@@ -2340,7 +2500,7 @@ mod tests {
         let (mut db, path) = database();
         upstream_samples(&db, "multiple-task", &[("cell-custom", "CELL", "{}")]);
         db.execute(
-            "INSERT INTO sample_types VALUES ('TISSUE','Tissue','user','now',NULL)",
+            "INSERT OR IGNORE INTO sample_types VALUES ('TISSUE','Tissue','user','now',NULL)",
             [],
         )
         .unwrap();
@@ -2381,6 +2541,172 @@ mod tests {
             )
             .unwrap();
         assert_eq!(event_outputs, 0);
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn record_defined_outputs_preserve_per_input_lineage_and_metadata() {
+        let (mut db, path) = database();
+        crate::protocol_service::save_user_protocol(
+            &mut db,
+            json!({
+                "id":"animal-harvest","name":"Animal harvest","description":"d",
+                "inputType":"ANIMAL","inputTypeDisplayName":"动物",
+                "outputBehavior":"one_to_many","consumptionPolicy":"retain",
+                "template":"{{input_sample_summary}} -> {{output_sample_summary}}",
+                "createdAt":"2026-09-18T09:00:00"
+            }),
+        )
+        .unwrap();
+        upstream_samples(
+            &db,
+            "harvest-task",
+            &[
+                ("animal-1", "ANIMAL", "{}"),
+                (
+                    "animal-2",
+                    "ANIMAL",
+                    r#"{"treatment_method":"old","treatment_duration":"24 h","other":"old"}"#,
+                ),
+            ],
+        );
+
+        let result = execute_with_external(
+            &mut db,
+            "harvest-task",
+            "animal-harvest",
+            "harvest-record",
+            json!({}),
+            vec!["animal-1".into(), "animal-2".into()],
+            vec![],
+            vec![
+                json!({"sourceInputIndex":0,"sampleType":"TISSUE","displayName":"M1 鼻黏膜","treatmentMethod":"冻存","treatmentDuration":"5 min","other":"左侧"}),
+                json!({"sourceInputIndex":0,"sampleType":"NUCLEI","displayName":"M1 细胞核"}),
+                json!({"sourceInputIndex":1,"sampleType":"TISSUE","displayName":"M2 肺"}),
+                json!({"sourceInputIndex":1,"sampleType":"BIOFILM","sampleTypeDisplayName":"生物膜","registerCustomType":true}),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(result.output_ids.len(), 4);
+        let first: (String, String, String, String) = db
+            .query_row(
+                "SELECT sample_type,parent_sample_id,display_name,metadata_json FROM samples WHERE id=?1",
+                [&result.output_ids[0]],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(first.0, "TISSUE");
+        assert_eq!(first.1, "animal-1");
+        assert_eq!(first.2, "M1 鼻黏膜");
+        let metadata: Value = serde_json::from_str(&first.3).unwrap();
+        assert_eq!(metadata["treatment_method"], "冻存");
+        assert_eq!(metadata["treatment_duration"], "5 min");
+        assert_eq!(metadata["other"], "左侧");
+        let blank_output_metadata: String = db
+            .query_row(
+                "SELECT metadata_json FROM samples WHERE id=?1",
+                [&result.output_ids[2]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let blank_output_metadata: Value = serde_json::from_str(&blank_output_metadata).unwrap();
+        assert!(blank_output_metadata.get("treatment_method").is_none());
+        assert!(blank_output_metadata.get("treatment_duration").is_none());
+        assert!(blank_output_metadata.get("other").is_none());
+        let usages: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sample_usages WHERE event_id='event-harvest-record' AND usage_type='non_destructive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(usages, 2);
+        let current: String = db
+            .query_row(
+                "SELECT current_data_json FROM records WHERE id='harvest-record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&current).unwrap()["outputDetails"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        let custom_type: (String, String) = db
+            .query_row(
+                "SELECT display_name,origin FROM sample_types WHERE canonical_type='BIOFILM'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(custom_type, ("生物膜".into(), "user".into()));
+        drop(db);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn record_defined_one_requires_one_output_and_consumes_atomically() {
+        let (mut db, path) = database();
+        crate::protocol_service::save_user_protocol(
+            &mut db,
+            json!({
+                "id":"animal-convert","name":"Animal convert","description":"d",
+                "inputType":"ANIMAL","outputBehavior":"one_to_one",
+                "consumptionPolicy":"consume",
+                "template":"{{output_sample_summary}}","createdAt":"now"
+            }),
+        )
+        .unwrap();
+        upstream_samples(&db, "convert-task", &[("animal-1", "ANIMAL", "{}")]);
+        let error = execute_with_external(
+            &mut db,
+            "convert-task",
+            "animal-convert",
+            "convert-record",
+            json!({}),
+            vec!["animal-1".into()],
+            vec![],
+            vec![
+                json!({"sourceInputIndex":0,"sampleType":"TISSUE"}),
+                json!({"sourceInputIndex":0,"sampleType":"NUCLEI"}),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.contains("exactly one output"));
+        let rolled_back: i64 = db
+            .query_row(
+                "SELECT count(*) FROM records WHERE id='convert-record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rolled_back, 0);
+
+        let result = execute_with_external(
+            &mut db,
+            "convert-task",
+            "animal-convert",
+            "convert-record",
+            json!({}),
+            vec!["animal-1".into()],
+            vec![],
+            vec![json!({"sourceInputIndex":0,"sampleType":"TISSUE"})],
+        )
+        .unwrap();
+        assert_eq!(result.output_ids.len(), 1);
+        let consumed: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sample_usages WHERE sample_id='animal-1' AND usage_type='consumed')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(consumed);
         drop(db);
         fs::remove_file(path).unwrap();
     }

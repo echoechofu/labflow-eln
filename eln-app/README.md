@@ -11,7 +11,9 @@ LabFlow 是一个 local-first 的 macOS / Windows 实验管理与电子实验记
 - Experiment 内只读 Task 关系图：支持分支、合流与孤立 Task；点击节点可打开既有 Task 详情。
 - 内置细胞复苏、细胞传代、铺板、刺激、RNA 提取、逆转录、qPCR、WB、上清液、ELISA、CCK-8 等 Protocol 执行流程。
 - Protocol Snapshot：创建 Record 时冻结版本与渲染后的实验正文，后续修改 Protocol 不会改写历史 Record。
+- 自建 Protocol：可定义原 Sample 沿用、1→1、1→多或1→0，设置一个、多个或任意适用输入类型，并在 Record 中逐行登记真实输出。
 - Protocol 驱动的 Sample/Result：支持输入选择、消耗、派生、孔板分孔、Result 与 Sample 分离及内部 lineage 完整性。
+- Record 输出清单：按通用材料类别选择 Sample 类型，填写自定义名称、处理方式、处理时间和备注；可复用上一行，并将首次的类型序列保存为该 Protocol 的默认预填。
 - qPCR、ELISA、CCK-8 共用独立的 Plate Mapping 与 Raw Data 骨架：保存 Sample × 检测项目映射、CSV/TSV 原文件及按孔位形成的 join dataset；当前不包含计算或分析 Result。
 - Records 按 Task 的实验日期分组；可合并预览，通过系统打印保存 PDF（最多 8 张图片），或使用支持进度/取消的“低内存 PDF”逐页写盘（图像式 PDF，文字不可选中复制）。
 - 每条 Record 的正文均可插入 PNG、JPEG、WebP 或 TIFF 图片，也可附加其他任意类型文件；原文件保存在工作区 `files/`，SQLite 只保存元数据和相对路径。
@@ -19,7 +21,7 @@ LabFlow 是一个 local-first 的 macOS / Windows 实验管理与电子实验记
 - 数据管理可一键导出完整 `.labflow-backup` 工作区，并在校验 SQLite、外键、相对路径和文件 checksum 后恢复；导入前自动保留当前工作区恢复点。
 - 导出清单、附件与 SQLite 均与源码目录隔离。
 
-本归档不包含云同步、多人协作、自由图编辑、Protocol Builder 或任意 Word/PDF 自动转换为可执行 Protocol。
+本归档不包含云同步、多人协作、自由图编辑，或任意 Word/PDF 自动转换为可执行 Protocol。
 
 ## 架构
 
@@ -90,9 +92,9 @@ npm run tauri:build:windows
 
 ## macOS 下载与安装
 
-从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.4) 下载 `LabFlow-0.1.4-Apple-Silicon.zip`，解压后将 `LabFlow.app` 拖入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
+从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.5) 下载 `LabFlow-0.1.5-Apple-Silicon.zip`，解压后将 `LabFlow.app` 拖入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本。
 
-如需验证下载完整性，可同时下载 `SHA256SUMS.txt`，将它与 ZIP 放在同一目录，先在终端执行 `shasum -a 256 LabFlow-0.1.4-Apple-Silicon.zip`，再用 `cat SHA256SUMS.txt` 查看官方值。校验是可选步骤；若执行校验而 Hash 不一致，请不要安装并重新下载。
+如需验证下载完整性，可同时下载 `SHA256SUMS.txt`，将它与 ZIP 放在同一目录，先在终端执行 `shasum -a 256 LabFlow-0.1.5-Apple-Silicon.zip`，再用 `cat SHA256SUMS.txt` 查看官方值。校验是可选步骤；若执行校验而 Hash 不一致，请不要安装并重新下载。
 
 当前发布包尚未经过 Apple Developer ID 签名与公证。首次尝试打开后若被 macOS 拦截，请打开“系统设置”→“隐私与安全性”，在“安全性”区域找到 `LabFlow was blocked to protect your Mac`，点击“仍要打开”（Open Anyway），再在确认窗口中点击“打开”。不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
 

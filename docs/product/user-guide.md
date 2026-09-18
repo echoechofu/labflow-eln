@@ -152,7 +152,7 @@ LabFlow 只显示以下可用输入：
 
 当前向导适合描述“选择一种输入 Sample，然后保留、消耗、派生或仅检测”的常规流程。它支持：
 
-- 一种声明的输入 Sample 类型；
+- 一种或多种适用的输入 Sample 类型，或显式选择不限类型；
 - 从当前 Experiment 选择已有 Sample，或登记 external Sample；
 - 保留或消耗输入 Sample；
 - 原 Sample 继续；
@@ -162,7 +162,7 @@ LabFlow 只显示以下可用输入：
 - 派生 Sample 继承对应父 Sample 的 metadata；
 - 保存可渲染的 Record 实验正文模板。
 
-当前向导**不支持**上传 Word/PDF 后自动生成 Protocol，也不能为自建 Protocol 配置任意动态表单、图形化手动选孔、终末检测或专属计算逻辑。自建 Protocol 在“产生多个 Sample”下可以选择相同条件或按条件组分配；条件组可选按行优先映射孔板位置。
+当前向导**不支持**上传 Word/PDF 后自动生成 Protocol，也不能为自建 Protocol 配置任意动态表单、图形化手动选孔、终末检测或专属计算逻辑。自建 Protocol 的 1→1/1→多输出在创建 Record 时通过清单逐行登记。
 
 ### 5.2 从哪里进入
 
@@ -184,27 +184,30 @@ LabFlow 只显示以下可用输入：
 
 ### 5.4 Step 2：Sample Flow
 
-#### 输入 Sample 类型
+#### 适用的输入类型
 
 选择已有类型，例如 `RNA`、`CELL`、`SUP`；也可以直接输入新类型，例如 `MICE` 或 `TISSUE`。
 
-新类型会在保存 Protocol 时注册。数据库中的 canonical type 会规范为大写；界面展示名可以保留用户输入形式。Sample 编号和 Sample 类型是两个概念，不要为了保存组别、刺激或时间而创建冗长类型名。
+可按分类选择一种或多种适用类型；创建 Record 时只显示匹配的 Sample，同一条 Record 的多个输入仍必须属于同一种类型。冻存、转移等真正通用的操作可选择“不限类型”。新类型会在保存 Protocol 时注册。数据库中的 canonical type 会规范为大写；界面展示名可以保留用户输入形式。Sample 编号和 Sample 类型是两个概念，不要为了保存组别、刺激或时间而创建冗长类型名。
 
 #### 完成以后
 
 | 选项 | 含义 | 例子 |
 | --- | --- | --- |
-| 原 Sample 继续 | 不创建新 Sample，过程完成后仍指向原 Sample。 | 非破坏性观察或状态记录。 |
-| 产生新的 Sample | 每个输入产生一个输出 Sample。 | RNA → cDNA。 |
-| 产生多个 Sample | 可选择多个输出条件相同，或在创建 Record 时按条件、浓度、处理时间和数量分组；条件分配可选映射孔板位置。 | 传代、平行分装或多条件处理。 |
-| 仅检测，不产生 Sample | 保存 Record 和输入使用情况，但不创建输出 Sample。 | 对既有 Sample 做 measurement-only 检测。 |
+| 原 Sample 沿用 | 保留原 Sample 身份；通过 Record 字段描述刺激、观察等变化。 | 加刺激、非破坏性观察。 |
+| 1→1 | 每个输入产生一个新 Sample，原输入消耗。 | RNA → cDNA。 |
+| 1→多 | 每个输入产生多个新 Sample，原输入可保留或消耗。 | 动物取材、分装、同时收集多种材料。 |
+| 1→0 | 原输入消耗，不产生需要继续追踪的 Sample。 | 破坏性终点检测。 |
 
-选择“产生新的 Sample”或“产生多个 Sample”时，还要选择或新建输出 Sample 类型。输出类型与孔板位置相互独立；例如输出可定义为 `CELL`、`PLATE` 或 `DISH`，启用孔位映射只会增加 `plate_position` metadata，不会强制改成 `WELL`。
+输出类型不在 Protocol 中预先固定。创建 Record 时，输出类型按材料分类展开，输出清单逐行填写来源、类型、自定义名称、处理方式、处理时间和其他说明；“复用上一行”用于批量填写。目录中没有合适的通用材料类别时，才登记带有明确显示名和 canonical code 的新类型，类型注册与 Record 创建在同一事务中完成。肺、鼻黏膜、肝等具体部位都选择 `TISSUE`，部位写在 Sample 名称或其他信息中。孔板、培养皿和孔位属于容器与位置，不作为新输出的材料类型。
+
+内置材料类型面向细胞、动物和微生物基础实验：`ANIMAL`、`CELL`、`TISSUE`、`NUCLEI`、`BACTERIA`、`FUNGI`、`VIRUS`、`ORGANOID`、`SPHEROID`、`WHOLE_BLOOD`、`SERUM`、`PLASMA`、`FECES`、`SUP`、`FRACTION`、`DNA`、`RNA`、`CDNA`、`PLASMID`、`AMPLICON`、`LIBRARY`、`PROTEIN`、`PEPTIDE`、`LIPID`、`METABOLITE` 和 `EV`。不提供兜底 `OTHER`；`LYSATE`、`HOMOGENATE`、`EXTRACT` 也不属于默认目录。已有用户自定义类型不会被删除。
 
 #### 输入 Sample
 
-- **保留**：输入在本次 Record 后仍可使用；
-- **视为已转化/消耗**：输入在本次 Record 后不再可用于后续实验。
+- 原 Sample 沿用固定为保留；
+- 1→1 与 1→0 固定为消耗；
+- 1→多由创建者选择保留或消耗。
 
 “原 Sample 继续”不能同时选择“视为已转化/消耗”，界面会阻止这种矛盾设置。
 
@@ -212,11 +215,10 @@ LabFlow 只显示以下可用输入：
 
 | 真实实验情况 | 完成以后 | 输入 Sample |
 | --- | --- | --- |
-| 只是记录原对象的新状态，仍是同一个 Sample | 原 Sample 继续 | 保留 |
-| 每份输入转化为一份新材料，原材料不再存在 | 产生新的 Sample | 视为已转化/消耗 |
-| 每份输入产生一份新材料，但现实中仍保留原材料 | 产生新的 Sample | 保留 |
-| 每份输入拆分为若干个新对象 | 产生多个 Sample | 按实际情况选择保留或消耗 |
-| 只记录检测值，不形成新的实验材料 | 仅检测，不产生 Sample | 按检测是否耗尽材料选择保留或消耗 |
+| 只是记录原对象的新状态，仍是同一个 Sample | 原 Sample 沿用 | 保留 |
+| 每份输入转化为一份新材料 | 1→1 | 消耗 |
+| 每份输入拆分或产生若干个新对象 | 1→多 | 按实际情况选择保留或消耗 |
+| 输入被用尽且没有后续材料 | 1→0 | 消耗 |
 
 右侧 Sample Flow Preview 用于核对方向，例如：
 

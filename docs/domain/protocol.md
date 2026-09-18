@@ -27,20 +27,18 @@ Protocol 由 `protocols` 与 `protocol_versions` 表表达。Protocol 和 versio
 
 内置 catalog 当前有 11 个 Protocol：细胞复苏、细胞传代、细胞铺板、细胞加刺激、RNA Extraction — Trizol、Reverse Transcription — PrimeScript、SYBR Green qPCR、Western Blot、培养上清收集、ELISA — 细胞因子、CCK-8 细胞增殖/毒性实验。ELISA 与 CCK-8 的实验正文来自仓库根目录的 `组内protocol整理_Ver1.0.doc`。
 
-从头创建路径可通过三步向导创建 Protocol v1：基本信息、Sample Flow、正文与字段。其基础范围是单一输入类型和以下输出语义；需要其他内置能力时使用上述来源复制路径：
+从头创建路径可通过三步向导创建 Protocol v1：基本信息、Sample Flow、正文与字段。“适用的输入类型”可选择一种或多种材料；同一 Record 的多个输入仍要求类型一致。真正通用的操作可以显式选择“不限类型”。输出类型不在 Protocol 创建时固定，而由执行者在 Record 中登记实际产出。新建路径强制选择以下身份流转之一：
 
-- 原 Sample 继续（`same_sample`）；
-- 每个输入派生一个新 Sample（`per_input`）；
-- 每个输入按 Record 启动时填写的数量派生多个 Sample（`per_input_count`）；
-- 每个输入按条件组派生多个 Sample（`per_input_conditions`），可选将输出顺序映射到孔板位置；
-- 每个输入按固定输出规则同时派生多种 Sample 类型（`per_input_types`），每种类型可配置数量；
-- 仅检测、不产生 Sample（`none`）。
+- 原 Sample 沿用（`same_sample`）：身份不变并固定保留；加刺激等状态变化由 Record 字段描述；
+- 1→1（`record_one`）：每个输入恰好登记一个新 Sample，原输入固定消耗；
+- 1→多（`record_many`）：每个输入逐行登记一个或多个实际输出，原输入可保留或消耗；
+- 1→0（`none`）：原输入固定消耗，不产生输出。
 
-多类型输出规则保存在 execution 的 `outputRules` 中，例如 SUP × 1、RNA × 1、PROTEIN × 1。规则会分别应用到每个输入 Sample，每个输出都直接记录对应输入为 parent，并在同一个 Record 事务内创建。每个 Protocol 支持 2–16 种不重复的输出类型，每种数量为 1–96，每个输入的输出总数不超过 96。输入 Sample 是否保留或消耗继续使用现有 `consumptionPolicy`，不由输出类型自动决定。
+Record 输出清单的一行代表一个真实 Sample，包含来源输入、类型、可选名称、处理方式、处理时间和其他说明。类型按实验对象、组织体液、细胞组分、核酸文库、蛋白小分子和自定义通用类型分组。自定义类型只用于目录缺少某种通用材料类别的情况；肺、鼻黏膜、肝等具体部位统一使用 `TISSUE`，部位写入名称或其他信息。若新建通用类型，显示名与 canonical code 会和 Record 在同一事务中登记。每个输出直接记录对应输入为 parent，并与 Record、ProcessEvent 和 usage 在同一事务中创建。输出清单支持复用上一行。自建 Protocol 首次使用后会询问是否将第一组输入的输出类型序列保存为新版本默认预填，后续仍可逐行修改。
 
-条件分配与 Sample 类型相互独立。创建者可将输出定义为任何已注册或同时注册的类型（例如 `CELL`、`PLATE`、`DISH`）；启用孔板映射时，位置写入输出 Sample 的 `plate_position` metadata，并不会把 Sample 类型强制改成 `WELL`。同一套条件组会分别应用到每个输入 Sample。
+Sample 类型表示材料是什么；处理条件、部位、菌株、细胞系、容器和位置分别保存为属性。新输出清单不提供兜底 `OTHER`，需要目录外材料时应创建有明确名称的自定义类型。孔板、培养皿和孔位不再出现在新输出清单中，但旧 `PLATE`、`DISH`、`WELL` Protocol 和历史 Record 继续按原 snapshot 执行。
 
-输入 usage 可声明为保留（`non_destructive`）或转化/消耗（`consumed`）；系统拒绝“原 Sample 继续 + consumed”的矛盾组合。用户也可注册新的 Sample 类型。持久化类型始终为大写 canonical value，展示名称可保留科学写法。
+1→多的输入 usage 可声明为保留（`non_destructive`）或消耗（`consumed`）；其他三种流转由身份语义固定 usage。持久化类型始终为大写 canonical value，展示名称可保留科学写法。
 
 创建 Record 时，执行器校验必填字段，按任务日期渲染模板，将 schema snapshot 和渲染后的正文写入 Record；随后按 execution rule 创建 ProcessEvent、Sample usage、输出 Sample 或 Result。
 

@@ -72,7 +72,8 @@ export function eligibleRecordInputSamples(
     (sample) =>
       !sample.consumed &&
       sample.experimentId === experimentId &&
-      acceptedTypes.has(normalizeSampleType(sample.type)),
+      (acceptedTypes.size === 0 ||
+        acceptedTypes.has(normalizeSampleType(sample.type))),
   );
 }
 
