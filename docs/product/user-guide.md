@@ -1,17 +1,17 @@
-# LabFlow 0.1.3 用户手册
+# LabFlow 0.1.5 用户手册
 
-本手册适用于 **LabFlow 0.1.3 — macOS / Windows x64 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。
+本手册适用于 **LabFlow 0.1.5 — macOS / Windows x64 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。关于 Project、Task、Protocol、Record、Sample 的完整关系和 Sample Flow 示例，请阅读[核心对象、Record 与 Sample Flow 使用指南](core-objects-and-sample-flow-guide.md)。
 
 ## 1. 安装与数据位置
 
-从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.3) 下载与系统匹配的文件：
+从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/latest) 下载与系统匹配的最新版文件：
 
-- Apple Silicon macOS 12+：`LabFlow-0.1.3-Apple-Silicon.zip`；
-- Windows 10/11 x64：优先下载 `LabFlow-0.1.3-Windows-x64-Setup.exe`。
+- Apple Silicon macOS 12+：文件名包含 `Apple-Silicon` 的 ZIP；
+- Windows 10/11 x64：优先下载文件名包含 `Windows-x64-Setup` 的 EXE。
 
-macOS 应同时下载 `SHA256SUMS.txt`。先对下载的 ZIP 或 DMG 执行 `shasum -a 256 <文件名>`，再用 `cat SHA256SUMS.txt` 查看官方值；两个 Hash 必须完全一致。当前版本尚未经过 Apple Developer ID 签名和公证；解压并将 `LabFlow.app` 拖入“应用程序”后，先尝试打开一次。若被拦截，请打开“系统设置”→“隐私与安全性”，在“安全性”区域点击 `LabFlow was blocked to protect your Mac` 旁的“仍要打开”（Open Anyway），再在确认窗口中点击“打开”。
+如希望确认安装包与 Release 中发布的文件完全一致，可以同时下载 `SHA256SUMS.txt`：对 ZIP 或 DMG 执行 `shasum -a 256 <文件名>`，再用 `cat SHA256SUMS.txt` 查看官方值。两处 Hash 应完全一致；这是可选的完整性校验，不是安装的强制步骤。当前版本尚未经过 Apple Developer ID 签名和公证；解压并将 `LabFlow.app` 拖入“应用程序”后，先尝试打开一次。若被拦截，请打开“系统设置”→“隐私与安全性”，在“安全性”区域点击 `LabFlow was blocked to protect your Mac` 旁的“仍要打开”（Open Anyway），再在确认窗口中点击“打开”。
 
-Windows MVP 当前没有 Authenticode 签名。请先核对 SHA-256，然后按 [Windows 安装与 SmartScreen 说明](windows-install.md)安装。
+Windows MVP 当前没有 Authenticode 签名。可按需核对 SHA-256，然后按 [Windows 安装与 SmartScreen 说明](windows-install.md)安装。
 
 实验数据不会写入 App 安装目录，而是保存在：
 

@@ -112,6 +112,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 - [产品范围](docs/product/scope.md)
 - [用户手册](docs/product/user-guide.md)
+- [核心对象、Record 与 Sample Flow 使用指南](docs/product/core-objects-and-sample-flow-guide.md)
 - [Protocol domain](docs/domain/protocol.md)
 - [Sample lineage](docs/domain/sample-lineage.md)
 - [Architecture overview](docs/architecture/overview.md)
