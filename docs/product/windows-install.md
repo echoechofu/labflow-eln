@@ -12,22 +12,22 @@ LabFlow-<版本>-Windows-x64-Setup.exe
 
 `.msi` 是供学校、实验室或企业 IT 部署的备选格式。两种格式安装的是同一版 LabFlow，不需要重复安装。
 
-## 2. 校验 SHA-256
+## 2. 可选：校验 SHA-256
 
-同时下载 `SHA256SUMS-Windows-x64.txt`，然后在下载目录打开 PowerShell，执行：
+如希望确认安装包与官方发布文件完全一致，可同时下载 `SHA256SUMS-Windows-x64.txt`，然后在下载目录打开 PowerShell，执行：
 
 ```powershell
 Get-FileHash -Algorithm SHA256 .\LabFlow-*-Windows-x64-Setup.exe
 Get-Content .\SHA256SUMS-Windows-x64.txt
 ```
 
-PowerShell 输出的 `Hash` 必须与校验文件中对应文件的 64 位字符完全一致（大小写可忽略）。不一致时不要运行安装包，请删除后从公开 Release 页重新下载。
+PowerShell 输出的 `Hash` 应与校验文件中对应文件的 64 位字符完全一致（大小写可忽略）。不一致时不要运行安装包，请删除后从公开 Release 页重新下载。跳过此步骤不会影响安装。
 
 ## 3. 通过 SmartScreen 安装未签名测试版
 
 LabFlow MVP 当前没有 Windows Authenticode 代码签名。因此 Windows 可能显示“Windows 已保护你的电脑”或“未知发布者”，这不代表校验失败。
 
-只有在上一步 SHA-256 完全匹配、且文件来自 `echoechofu/labflow-releases` 时，才按以下步骤继续：
+请确认文件来自 `echoechofu/labflow-releases`。如果执行了 SHA-256 校验，还应确认校验结果匹配，然后按以下步骤继续：
 
 1. 双击 `LabFlow-<版本>-Windows-x64-Setup.exe`。
 2. 如出现蓝色 SmartScreen 界面，点击“更多信息”。
