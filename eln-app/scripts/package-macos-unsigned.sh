@@ -24,6 +24,17 @@ if [ ! -d "$app_path" ]; then
   exit 1
 fi
 
+sidecar_path="$app_path/Contents/MacOS/labflow-mcp"
+if [ ! -x "$sidecar_path" ]; then
+  echo "Bundled LabFlow MCP sidecar is missing or not executable: $sidecar_path" >&2
+  exit 1
+fi
+if ! file "$sidecar_path" | grep -q "Mach-O 64-bit executable arm64"; then
+  echo "Bundled LabFlow MCP sidecar is not an Apple Silicon executable: $sidecar_path" >&2
+  file "$sidecar_path" >&2
+  exit 1
+fi
+
 mkdir -p "$output_dir"
 
 # Tauri creates the app bundle but, without a Developer ID identity, does not

@@ -911,7 +911,7 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
         samples.push(row.map_err(|e| e.to_string())?)
     }
     let mut records = Vec::new();
-    let mut statement = connection.prepare("SELECT id, task_id, experiment_id, protocol_id, current_data_json, updated_at, protocol_snapshot_json FROM records").map_err(|e| e.to_string())?;
+    let mut statement = connection.prepare("SELECT record.id, record.task_id, record.experiment_id, record.protocol_id, record.current_data_json, record.updated_at, record.protocol_snapshot_json, task.title FROM records record JOIN tasks task ON task.id=record.task_id").map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok((
@@ -922,11 +922,12 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
             ))
         })
         .map_err(|e| e.to_string())?;
     for row in rows {
-        let (id, task_id, experiment_id, protocol_id, data, updated, snapshot_json) =
+        let (id, task_id, experiment_id, protocol_id, data, updated, snapshot_json, task_title) =
             row.map_err(|e| e.to_string())?;
         let current: Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
         let snapshot: Value = serde_json::from_str(&snapshot_json).unwrap_or(json!({}));
@@ -970,7 +971,7 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
         for attachment in attachment_rows {
             attachments.push(attachment.map_err(|error| error.to_string())?);
         }
-        records.push(json!({"id":id,"taskId":task_id,"experimentId":experiment_id,"protocolId":protocol_id,"protocolName":snapshot["name"],"protocolSnapshot":snapshot,"title":current["title"],"updated":updated,"notes":current["notes"],"inputs":inputs,"outputs":outputs,"results":results,"attachments":attachments,"history":history,"renderedContent":current["renderedContent"],"analysisSections":current["analysisSections"],"values":current["values"],"protocolVersion":snapshot["version"]}));
+        records.push(json!({"id":id,"taskId":task_id,"experimentId":experiment_id,"protocolId":protocol_id,"protocolName":snapshot["name"],"protocolSnapshot":snapshot,"title":task_title,"updated":updated,"notes":current["notes"],"inputs":inputs,"outputs":outputs,"results":results,"attachments":attachments,"history":history,"renderedContent":current["renderedContent"],"analysisSections":current["analysisSections"],"values":current["values"],"protocolVersion":snapshot["version"]}));
     }
     Ok(
         json!({"experiments":experiments,"tasks":tasks,"protocols":protocols,"sampleTypes":sample_types,"samples":samples,"records":records}),
@@ -2352,6 +2353,43 @@ mod tests {
         assert_eq!(catalog, (29, 1, 0));
         drop(connection);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn desktop_store_uses_current_task_title_for_existing_record() {
+        let connection = Connection::open_in_memory().unwrap();
+        apply_schema(&connection).unwrap();
+        connection.execute_batch(
+            "INSERT INTO experiments VALUES ('e','EXP','Experiment','','#000');
+             INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,record_id,created_at,updated_at)
+               VALUES ('t','e','Original Task','2026-09-20T09:00','2026-09-20T10:00','in_progress','r','now','now');
+             INSERT INTO records (id,task_id,experiment_id,protocol_id,protocol_snapshot_json,current_data_json,updated_at)
+               VALUES ('r','t','e','p','{\"name\":\"Protocol\",\"version\":1}','{\"title\":\"Original Task\",\"renderedContent\":\"frozen body\"}','now');",
+        )
+        .unwrap();
+        let frozen_before: String = connection
+            .query_row(
+                "SELECT current_data_json FROM records WHERE id='r'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        connection
+            .execute("UPDATE tasks SET title='Renamed Task' WHERE id='t'", [])
+            .unwrap();
+
+        let store = read_store(&connection).unwrap();
+        assert_eq!(store["records"][0]["title"], "Renamed Task");
+        assert_eq!(store["records"][0]["renderedContent"], "frozen body");
+        let frozen_after: String = connection
+            .query_row(
+                "SELECT current_data_json FROM records WHERE id='r'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(frozen_after, frozen_before);
     }
 
     #[test]

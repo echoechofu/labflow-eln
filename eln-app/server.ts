@@ -179,13 +179,18 @@ const readStore = (): Store => {
     active_version: number;
     accent: string;
   }>;
-  const rs = db.prepare("SELECT * FROM records").all() as Array<{
+  const rs = db
+    .prepare(
+      "SELECT records.*, tasks.title AS task_title FROM records JOIN tasks ON tasks.id=records.task_id",
+    )
+    .all() as Array<{
     id: string;
     task_id: string;
     experiment_id: string;
     protocol_id: string;
     current_data_json: string;
     updated_at: string;
+    task_title: string;
   }>;
   return {
     experiments: (
@@ -268,14 +273,13 @@ const readStore = (): Store => {
         notes: string;
         inputs: string[];
         outputs: string[];
-        title: string;
       };
       return {
         id: r.id,
         taskId: r.task_id,
         experimentId: r.experiment_id,
         protocolId: r.protocol_id,
-        title: data.title,
+        title: r.task_title,
         updated: r.updated_at,
         notes: data.notes,
         inputs: data.inputs,

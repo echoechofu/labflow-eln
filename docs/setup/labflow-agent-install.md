@@ -1,5 +1,7 @@
 # Installing the LabFlow Agent Interface
 
+> 普通用户请先阅读中文的 [LabFlow MCP 安装与使用指南](../product/mcp-user-guide.md)。LabFlow 0.1.6 的 macOS App 已内置 MCP sidecar；本页主要面向拥有源码访问权限、需要手动构建、调试 MCP，或在仍为 0.1.5 的 Windows 测试版中使用 MCP 的开发者与测试者。
+
 This guide is for people who want to drive the LabFlow workspace from a
 local Agent (WorkBuddy, Codex CLI, or any MCP-compatible client) without
 re-running the project installer.
@@ -16,10 +18,9 @@ install:
 
 ## 0. Prerequisites
 
-- A working LabFlow Desktop install (so the canonical user-data directory
-  `~/Library/Application Support/LabFlow/` exists). The MCP server uses
-  the same canonical path the Desktop app uses.
-- Node ≥ 18 (the build script shells out to `npm` for the Rust build).
+- A LabFlow Desktop install is recommended so the UI and MCP can share the
+  same workspace. The MCP initializes the canonical path when it starts.
+- Node.js 24 (the repository's supported build version).
 - Rust 1.98.0 (`rustup install 1.98.0`).
 
 ## 1. Quick path: one-shot installer
@@ -60,7 +61,7 @@ npm run mcp:build
 The artifact is `eln-app/src-tauri/target/release/labflow-mcp` (macOS) or
 the equivalent platform-specific path. The binary uses `dirs::data_dir()`,
 so a Linux build writes to `~/.local/share/LabFlow/` and a Windows build
-writes to `%APPDATA%\Roaming\LabFlow\`. Cross-compile via
+writes to `%APPDATA%\LabFlow\`. Cross-compile via
 `cargo build --release --target x86_64-unknown-linux-gnu` (or the matching
 target) after the appropriate target is added with `rustup target add`.
 
@@ -157,7 +158,6 @@ seen traces back to skipping one of those two rules.
 - **Linux** — build with `cargo build --release --target
   x86_64-unknown-linux-gnu`; the canonical data directory is
   `~/.local/share/LabFlow/`.
-- **Windows** — `cargo build --release --target
-  x86_64-pc-windows-msvc`; canonical data directory is
-  `%APPDATA%\Roaming\LabFlow\`. The install script auto-targets the host
-  OS via `cargo`, so on Windows it produces `labflow-mcp.exe` directly.
+- **Windows** — build natively with `npm run mcp:build`; canonical data
+  directory is `%APPDATA%\LabFlow\`. The current Bash one-shot installer is
+  macOS-oriented, so Windows users register `labflow-mcp.exe` manually.

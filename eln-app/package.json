@@ -1,7 +1,7 @@
 {
   "name": "eln-app",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
@@ -14,10 +14,11 @@
     "lint": "oxlint --ignore-pattern 'src-tauri/target/**'",
     "test": "tsx --tsconfig tsconfig.app.json --test tests/*.test.ts",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "prepare:mcp-sidecar": "node scripts/prepare-mcp-sidecar.mjs",
+    "tauri:dev": "npm run prepare:mcp-sidecar && tauri dev",
     "tauri:build": "npm run tauri:build:app && ./scripts/package-macos-unsigned.sh",
-    "tauri:build:app": "tauri build --bundles app",
-    "tauri:build:windows": "tauri build --bundles nsis,msi",
+    "tauri:build:app": "npm run prepare:mcp-sidecar && tauri build --bundles app",
+    "tauri:build:windows": "npm run prepare:mcp-sidecar && tauri build --bundles nsis,msi",
     "mcp:build": "cargo +1.98.0 build --release --manifest-path src-tauri/Cargo.toml --bin labflow-mcp",
     "preview": "vite preview"
   },

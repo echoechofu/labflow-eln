@@ -142,9 +142,15 @@ pub fn get_record(
         String,
         String,
         String,
+        String,
     )> = connection
         .query_row(
-            "SELECT id, task_id, experiment_id, protocol_id, current_data_json, updated_at, protocol_snapshot_json FROM records WHERE id=?1",
+            "SELECT record.id, record.task_id, record.experiment_id, record.protocol_id,
+                    record.current_data_json, record.updated_at, record.protocol_snapshot_json,
+                    task.title
+             FROM records record
+             JOIN tasks task ON task.id=record.task_id
+             WHERE record.id=?1",
             [id],
             |row| {
                 Ok((
@@ -155,11 +161,14 @@ pub fn get_record(
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )
         .optional()?;
-    let Some((id, task_id, experiment_id, protocol_id, data, updated, snapshot_json)) = row else {
+    let Some((id, task_id, experiment_id, protocol_id, data, updated, snapshot_json, task_title)) =
+        row
+    else {
         return Ok(None);
     };
     let current: Value = serde_json::from_str(&data)
@@ -228,10 +237,7 @@ pub fn get_record(
             .and_then(Value::as_str)
             .map(str::to_owned),
         protocol_snapshot: snapshot.clone(),
-        title: current
-            .get("title")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        title: Some(task_title),
         updated,
         notes: current
             .get("notes")
@@ -254,8 +260,13 @@ pub fn list_records(
     experiment_id: Option<&str>,
 ) -> Result<Vec<RecordSummary>, RecordServiceError> {
     let mut statement = connection.prepare(
-        "SELECT id,task_id,experiment_id,protocol_id,current_data_json,updated_at,protocol_snapshot_json
-         FROM records WHERE (?1 IS NULL OR experiment_id=?1) ORDER BY updated_at DESC,id",
+        "SELECT record.id,record.task_id,record.experiment_id,record.protocol_id,
+                record.current_data_json,record.updated_at,record.protocol_snapshot_json,
+                task.title
+         FROM records record
+         JOIN tasks task ON task.id=record.task_id
+         WHERE (?1 IS NULL OR record.experiment_id=?1)
+         ORDER BY record.updated_at DESC,record.id",
     )?;
     let rows = statement.query_map([experiment_id], |row| {
         Ok((
@@ -266,11 +277,13 @@ pub fn list_records(
             row.get::<_, String>(4)?,
             row.get::<_, String>(5)?,
             row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
         ))
     })?;
     let mut summaries = Vec::new();
     for row in rows {
-        let (id, task_id, experiment_id, protocol_id, data, updated, snapshot_json) = row?;
+        let (id, task_id, experiment_id, protocol_id, data, updated, snapshot_json, task_title) =
+            row?;
         let current: Value = serde_json::from_str(&data)
             .map_err(|error| RecordServiceError::Persistence(error.to_string()))?;
         let snapshot: Value = serde_json::from_str(&snapshot_json).unwrap_or(json!({}));
@@ -284,10 +297,7 @@ pub fn list_records(
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             protocol_snapshot: snapshot.clone(),
-            title: current
-                .get("title")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            title: Some(task_title),
             updated,
             notes: current
                 .get("notes")
@@ -717,9 +727,44 @@ mod tests {
         let records = list_records(&connection, None).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, "r");
+        assert_eq!(records[0].title.as_deref(), Some("T"));
         assert_eq!(records[0].inputs, ["s"]);
         assert_eq!(records[0].results.len(), 1);
         assert_eq!(records[0].attachments.len(), 1);
         assert_eq!(records[0].history.len(), 1);
+    }
+
+    #[test]
+    fn task_rename_updates_record_display_title_without_mutating_record_snapshot() {
+        let connection = fresh();
+        seed_record(&connection);
+        let before: String = connection
+            .query_row(
+                "SELECT current_data_json FROM records WHERE id='r'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        connection
+            .execute("UPDATE tasks SET title='Renamed Task' WHERE id='t'", [])
+            .unwrap();
+
+        let record = get_record(&connection, "r").unwrap().unwrap();
+        assert_eq!(record.title.as_deref(), Some("Renamed Task"));
+        assert_eq!(record.rendered_content, Some(json!("initial body")));
+        assert_eq!(record.protocol_snapshot["version"], 1);
+
+        let records = list_records(&connection, Some("e")).unwrap();
+        assert_eq!(records[0].title.as_deref(), Some("Renamed Task"));
+
+        let after: String = connection
+            .query_row(
+                "SELECT current_data_json FROM records WHERE id='r'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, before);
     }
 }
