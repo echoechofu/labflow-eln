@@ -32,8 +32,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - id: version
@@ -59,8 +59,8 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.LABFLOW_UPDATER_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -69,6 +69,11 @@ jobs:
         with:
           toolchain: 1.98.0
       - run: npm ci
+      - name: Bootstrap external binary path for Cargo tests
+        run: |
+          mkdir -p src-tauri/binaries
+          : > src-tauri/binaries/labflow-mcp-aarch64-apple-darwin
+          chmod +x src-tauri/binaries/labflow-mcp-aarch64-apple-darwin
       - name: Run application checks
         run: |
           npm run lint
@@ -103,8 +108,8 @@ jobs:
     needs: [verify-version, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - uses: actions/download-artifact@v4
