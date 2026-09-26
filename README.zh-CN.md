@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/echoechofu/labflow-releases/releases/latest">下载 LabFlow</a>
+  <a href="https://github.com/echoechofu/labflow-releases#下载最新版">下载 LabFlow</a>
   ·
   <a href="docs/product/user-guide.md">用户手册</a>
   ·
@@ -49,20 +49,26 @@ LabFlow 自带常用生物医学实验 Protocol，用户下载后可以直接从
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/calendar.jpg" alt="LabFlow 周实验日历和湿实验任务" /></td>
-    <td width="50%"><img src="docs/assets/screenshots/experiment-network.jpg" alt="LabFlow 实验任务依赖网络" /></td>
+    <td colspan="2"><a href="docs/assets/screenshots/weekly-calendar.png"><img src="docs/assets/screenshots/weekly-calendar.png" alt="LabFlow 周日历中的多套生物医学湿实验流程" /></a></td>
   </tr>
   <tr>
-    <td align="center"><strong>按周排期</strong><br />安排 Task，并持续看到跨天实验的进度。</td>
-    <td align="center"><strong>实验上下文</strong><br />查看已保存 Task 之间的前后依赖。</td>
+    <td colspan="2" align="center"><strong>按周排期</strong><br />在一张日历中持续看到多套跨天湿实验流程。</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/protocols.jpg" alt="LabFlow 可复用生物医学实验 Protocol 库" /></td>
-    <td width="50%"><img src="docs/assets/screenshots/record-detail.jpg" alt="LabFlow 实验 Record、样本输出和真实操作步骤" /></td>
+    <td width="50%"><a href="docs/assets/screenshots/task-editor.png"><img src="docs/assets/screenshots/task-editor.png" alt="LabFlow Task 编辑窗口中的 Experiment、时间和依赖关系" /></a></td>
+    <td width="50%"><a href="docs/assets/screenshots/protocol-version-editor.png"><img src="docs/assets/screenshots/protocol-version-editor.png" alt="LabFlow 带版本的 Protocol 编辑器和 Record 预览" /></a></td>
   </tr>
   <tr>
-    <td align="center"><strong>可复用 Protocol</strong><br />维护方法，并保留明确的版本。</td>
-    <td align="center"><strong>本次真实 Record</strong><br />保存每次执行的步骤、观察、样本和文件。</td>
+    <td align="center"><strong>设置 Task</strong><br />选择 Experiment、安排时间，并连接前后依赖。</td>
+    <td align="center"><strong>带版本的 Protocol</strong><br />更新方法时，已有 Record 继续保留原始快照。</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/assets/screenshots/record-files.png"><img src="docs/assets/screenshots/record-files.png" alt="LabFlow 实验 Record 中的操作正文和原始实验文件" /></a></td>
+    <td width="50%"><a href="docs/assets/screenshots/records-list.png"><img src="docs/assets/screenshots/records-list.png" alt="LabFlow 按实验日期整理的 Record 列表和合并导出" /></a></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>实验文件</strong><br />把操作正文和原始实验文件保存在同一条 Record 中。</td>
+    <td align="center"><strong>查看与导出</strong><br />按实验日期查看 Record，并合并导出所选实验记录。</td>
   </tr>
 </table>
 

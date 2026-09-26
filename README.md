@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/echoechofu/labflow-releases/releases/latest">Download LabFlow</a>
+  <a href="https://github.com/echoechofu/labflow-releases#下载最新版">Download LabFlow</a>
   ·
   <a href="docs/product/user-guide.md">User guide</a>
   ·
@@ -49,20 +49,26 @@ LabFlow starts with practical biomedical Protocols, so a researcher can begin wi
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/calendar.jpg" alt="LabFlow weekly experiment calendar with scheduled wet-lab tasks" /></td>
-    <td width="50%"><img src="docs/assets/screenshots/experiment-network.jpg" alt="LabFlow experiment task dependency network" /></td>
+    <td colspan="2"><a href="docs/assets/screenshots/weekly-calendar.png"><img src="docs/assets/screenshots/weekly-calendar.png" alt="LabFlow weekly calendar with multiple biomedical wet-lab workflows" /></a></td>
   </tr>
   <tr>
-    <td align="center"><strong>Weekly planning</strong><br />Schedule Tasks and keep multi-day experiments visible.</td>
-    <td align="center"><strong>Experiment context</strong><br />See how saved Tasks depend on one another.</td>
+    <td colspan="2" align="center"><strong>Weekly planning</strong><br />Keep several multi-day wet-lab workflows visible in one calendar.</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/protocols.jpg" alt="LabFlow reusable biomedical protocol library" /></td>
-    <td width="50%"><img src="docs/assets/screenshots/record-detail.jpg" alt="LabFlow experimental record with sample output and actual procedure" /></td>
+    <td width="50%"><a href="docs/assets/screenshots/task-editor.png"><img src="docs/assets/screenshots/task-editor.png" alt="LabFlow Task editor with Experiment assignment, time, and dependencies" /></a></td>
+    <td width="50%"><a href="docs/assets/screenshots/protocol-version-editor.png"><img src="docs/assets/screenshots/protocol-version-editor.png" alt="LabFlow versioned Protocol editor and Record preview" /></a></td>
   </tr>
   <tr>
-    <td align="center"><strong>Reusable Protocols</strong><br />Maintain methods with explicit versions.</td>
-    <td align="center"><strong>Actual Records</strong><br />Preserve the procedure, observations, samples, and files from each run.</td>
+    <td align="center"><strong>Task setup</strong><br />Assign an Experiment, schedule the work, and connect dependencies.</td>
+    <td align="center"><strong>Versioned Protocols</strong><br />Update a method while existing Records keep their original snapshots.</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/assets/screenshots/record-files.png"><img src="docs/assets/screenshots/record-files.png" alt="LabFlow experimental Record with procedure and original file attachments" /></a></td>
+    <td width="50%"><a href="docs/assets/screenshots/records-list.png"><img src="docs/assets/screenshots/records-list.png" alt="LabFlow Records organized by experiment date with combined export" /></a></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Record files</strong><br />Keep the procedure and original experimental files in the same Record.</td>
+    <td align="center"><strong>Review and export</strong><br />Browse Records by experiment date and export selected work together.</td>
   </tr>
 </table>
 
