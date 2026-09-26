@@ -414,6 +414,12 @@ fn apply_schema(connection: &Connection) -> Result<(), String> {
         .execute_batch(include_str!("schema.sql"))
         .map_err(|error| error.to_string())?;
     migrate_records_protocol_reference(connection)?;
+    ensure_column(
+        connection,
+        "experiments",
+        "hidden",
+        "hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1))",
+    )?;
     ensure_column(connection, "samples", "display_name", "display_name TEXT")?;
     ensure_column(connection, "samples", "created_at", "created_at TEXT")?;
     ensure_column(
@@ -546,7 +552,7 @@ fn seed_if_empty(connection: &mut Connection) -> Result<(), String> {
         .transaction()
         .map_err(|error| error.to_string())?;
     transaction.execute(
-        "INSERT INTO experiments VALUES ('exp-template','EXP001','A549 siRNA 筛选模板','模板工作流：复苏 → 传代 → 铺板 → 刺激/成像 → RNA','#167c80')",
+        "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp-template','EXP001','A549 siRNA 筛选模板','模板工作流：复苏 → 传代 → 铺板 → 刺激/成像 → RNA','#167c80')",
         [],
     ).map_err(|error| error.to_string())?;
     transaction.execute(
@@ -871,9 +877,9 @@ fn seed_if_empty(connection: &mut Connection) -> Result<(), String> {
 fn read_store(connection: &Connection) -> Result<Value, String> {
     let mut experiments = Vec::new();
     let mut statement = connection
-        .prepare("SELECT id, experiment_code, title, description, color FROM experiments")
+        .prepare("SELECT id, experiment_code, title, description, color, hidden FROM experiments")
         .map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| Ok(json!({"id": row.get::<_, String>(0)?, "code": row.get::<_, String>(1)?, "title": row.get::<_, String>(2)?, "description": row.get::<_, String>(3)?, "color": row.get::<_, String>(4)?}))).map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| Ok(json!({"id": row.get::<_, String>(0)?, "code": row.get::<_, String>(1)?, "title": row.get::<_, String>(2)?, "description": row.get::<_, String>(3)?, "color": row.get::<_, String>(4)?, "hidden": row.get::<_, bool>(5)?}))).map_err(|e| e.to_string())?;
     for row in rows {
         experiments.push(row.map_err(|e| e.to_string())?)
     }
@@ -966,8 +972,8 @@ fn read_store(connection: &Connection) -> Result<Value, String> {
             results.push(result.map_err(|error| error.to_string())?);
         }
         let mut attachments = Vec::new();
-        let mut attachment_statement = connection.prepare("SELECT id,file_name,relative_path,mime_type,size,content_sha256,preview_relative_path,width_px,height_px FROM attachments WHERE record_id=?1 ORDER BY created_at,id").map_err(|error|error.to_string())?;
-        let attachment_rows = attachment_statement.query_map([&id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"fileName":row.get::<_,String>(1)?,"relativePath":row.get::<_,String>(2)?,"mimeType":row.get::<_,Option<String>>(3)?,"size":row.get::<_,Option<i64>>(4)?,"contentSha256":row.get::<_,Option<String>>(5)?,"previewRelativePath":row.get::<_,Option<String>>(6)?,"widthPx":row.get::<_,Option<i64>>(7)?,"heightPx":row.get::<_,Option<i64>>(8)?}))).map_err(|error|error.to_string())?;
+        let mut attachment_statement = connection.prepare("SELECT id,file_name,relative_path,mime_type,size,content_sha256,preview_relative_path,width_px,height_px,EXISTS(SELECT 1 FROM assay_raw_imports WHERE attachment_id=attachments.id) FROM attachments WHERE record_id=?1 ORDER BY created_at,id").map_err(|error|error.to_string())?;
+        let attachment_rows = attachment_statement.query_map([&id], |row| Ok(json!({"id":row.get::<_,String>(0)?,"fileName":row.get::<_,String>(1)?,"relativePath":row.get::<_,String>(2)?,"mimeType":row.get::<_,Option<String>>(3)?,"size":row.get::<_,Option<i64>>(4)?,"contentSha256":row.get::<_,Option<String>>(5)?,"previewRelativePath":row.get::<_,Option<String>>(6)?,"widthPx":row.get::<_,Option<i64>>(7)?,"heightPx":row.get::<_,Option<i64>>(8)?,"isAssayRaw":row.get::<_,bool>(9)?}))).map_err(|error|error.to_string())?;
         for attachment in attachment_rows {
             attachments.push(attachment.map_err(|error| error.to_string())?);
         }
@@ -1019,13 +1025,14 @@ fn write_store(connection: &mut Connection, store: Value) -> Result<(), String> 
     for item in value_array(&store, "experiments")? {
         transaction
             .execute(
-                "INSERT INTO experiments VALUES (?1,?2,?3,?4,?5)",
+                "INSERT INTO experiments (id,experiment_code,title,description,color,hidden) VALUES (?1,?2,?3,?4,?5,?6)",
                 params![
                     value_string(item, "id")?,
                     value_string(item, "code")?,
                     value_string(item, "title")?,
                     value_string(item, "description")?,
-                    value_string(item, "color")?
+                    value_string(item, "color")?,
+                    item.get("hidden").and_then(Value::as_bool).unwrap_or(false)
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -1315,9 +1322,9 @@ fn insert_record_image(
 }
 
 #[tauri::command]
-fn insert_record_files(
+async fn insert_record_files(
     app: AppHandle,
-    state: State<DatabaseState>,
+    state: State<'_, DatabaseState>,
     request: record_attachment_service::InsertRecordFilesRequest,
 ) -> Result<Vec<record_service::RecordAttachment>, String> {
     let mut connection = state
@@ -2206,6 +2213,8 @@ fn mark_export_print_requested(state: State<DatabaseState>, id: String) -> Resul
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("labflow-attachment", |context, request| {
             let attachment_id = request
@@ -2360,7 +2369,7 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         apply_schema(&connection).unwrap();
         connection.execute_batch(
-            "INSERT INTO experiments VALUES ('e','EXP','Experiment','','#000');
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Experiment','','#000');
              INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,record_id,created_at,updated_at)
                VALUES ('t','e','Original Task','2026-09-20T09:00','2026-09-20T10:00','in_progress','r','now','now');
              INSERT INTO records (id,task_id,experiment_id,protocol_id,protocol_snapshot_json,current_data_json,updated_at)
@@ -2404,7 +2413,7 @@ mod tests {
              CREATE TABLE protocol_versions (protocol_id TEXT NOT NULL REFERENCES protocols(id), version_number INTEGER NOT NULL, schema_json TEXT NOT NULL, origin TEXT NOT NULL DEFAULT 'user', created_at TEXT, PRIMARY KEY(protocol_id,version_number));
              CREATE TABLE records (id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id), experiment_id TEXT NOT NULL REFERENCES experiments(id), protocol_id TEXT NOT NULL REFERENCES protocols(id), protocol_snapshot_json TEXT NOT NULL, current_data_json TEXT NOT NULL, updated_at TEXT NOT NULL);
              CREATE TABLE record_changes (id TEXT PRIMARY KEY, record_id TEXT NOT NULL REFERENCES records(id), field_path TEXT NOT NULL, old_value_json TEXT NOT NULL, new_value_json TEXT NOT NULL, actor_id TEXT NOT NULL, changed_at TEXT NOT NULL);
-             INSERT INTO experiments VALUES ('e','EXP','Experiment','','#000');
+             INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Experiment','','#000');
              INSERT INTO tasks VALUES ('t','e','Task','2026-08-27T09:00:00','2026-08-27T10:00:00','completed','r');
              INSERT INTO protocols VALUES ('p','Protocol','Test',1,'#000','','user');
              INSERT INTO protocol_versions VALUES ('p',1,'{}','user','now');
@@ -2448,7 +2457,7 @@ mod tests {
         let mut connection = Connection::open(&path).unwrap();
         apply_schema(&connection).unwrap();
         connection.execute_batch(
-            "INSERT INTO experiments VALUES ('e','EXP','Experiment','','#000');
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Experiment','','#000');
              INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,record_id,created_at,updated_at)
                VALUES ('t','e','Task','2026-08-27T09:00:00','2026-08-27T10:00:00','completed','r','now','now');
              INSERT INTO protocols (id,name,category,active_version,accent,description,origin)
@@ -2579,7 +2588,7 @@ mod tests {
     fn migration_canonicalizes_sample_types_without_changing_sample_codes() {
         let path = temporary_database_path("sample-type-canonicalization");
         let connection = Connection::open(&path).unwrap();
-        connection.execute_batch("CREATE TABLE experiments (id TEXT PRIMARY KEY, experiment_code TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL, color TEXT NOT NULL); CREATE TABLE records (id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, experiment_id TEXT NOT NULL, protocol_id TEXT NOT NULL, protocol_snapshot_json TEXT NOT NULL, current_data_json TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE samples (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT 'local', experiment_id TEXT NOT NULL, sample_code TEXT NOT NULL, sample_type TEXT NOT NULL, source_record_id TEXT, parent_sample_id TEXT, UNIQUE(workspace_id,sample_code)); INSERT INTO experiments VALUES ('exp','EXP900','Legacy','','#000'); INSERT INTO samples VALUES ('cdna','local','exp','EXP900-cDNA01','cDNA',NULL,NULL);").unwrap();
+        connection.execute_batch("CREATE TABLE experiments (id TEXT PRIMARY KEY, experiment_code TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL, color TEXT NOT NULL); CREATE TABLE records (id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, experiment_id TEXT NOT NULL, protocol_id TEXT NOT NULL, protocol_snapshot_json TEXT NOT NULL, current_data_json TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE samples (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT 'local', experiment_id TEXT NOT NULL, sample_code TEXT NOT NULL, sample_type TEXT NOT NULL, source_record_id TEXT, parent_sample_id TEXT, UNIQUE(workspace_id,sample_code)); INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP900','Legacy','','#000'); INSERT INTO samples VALUES ('cdna','local','exp','EXP900-cDNA01','cDNA',NULL,NULL);").unwrap();
         apply_schema(&connection).unwrap();
         let (sample_code, sample_type): (String, String) = connection
             .query_row(
@@ -2603,7 +2612,7 @@ mod tests {
         apply_schema(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP900','Origins','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP900','Origins','','#000')",
                 [],
             )
             .unwrap();
@@ -2630,7 +2639,7 @@ mod tests {
         apply_schema(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP900','Passage migration','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP900','Passage migration','','#000')",
                 [],
             )
             .unwrap();
@@ -2660,7 +2669,7 @@ mod tests {
         apply_schema(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('persist','E900','Restart persistence','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('persist','E900','Restart persistence','','#000')",
                 [],
             )
             .unwrap();
@@ -2808,7 +2817,7 @@ mod tests {
         let mut db = Connection::open(&path).unwrap();
         apply_schema(&db).unwrap();
         db.execute(
-            "INSERT INTO experiments VALUES ('e','EXP010','Persistence','','#000')",
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP010','Persistence','','#000')",
             [],
         )
         .unwrap();
@@ -2880,7 +2889,7 @@ mod tests {
         let db = Connection::open(&path).unwrap();
         apply_schema(&db).unwrap();
         db.execute(
-            "INSERT INTO experiments VALUES ('e','EXP100','Task test','','#000')",
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP100','Task test','','#000')",
             [],
         )
         .unwrap();
@@ -2934,7 +2943,7 @@ mod tests {
         let mut db = Connection::open(&path).unwrap();
         apply_schema(&db).unwrap();
         db.execute(
-            "INSERT INTO experiments VALUES ('e','EXP001','Tiam1 siRNA screening','','#000')",
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP001','Tiam1 siRNA screening','','#000')",
             [],
         )
         .unwrap();
@@ -3105,7 +3114,7 @@ mod tests {
         ensure_builtin_protocols(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP900','Delete record','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP900','Delete record','','#000')",
                 [],
             )
             .unwrap();
@@ -3180,7 +3189,7 @@ mod tests {
         ensure_builtin_protocols(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP901','Record body edit','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP901','Record body edit','','#000')",
                 [],
             )
             .unwrap();
@@ -3304,7 +3313,7 @@ mod tests {
         ensure_builtin_protocols(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP900','Delete record','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP900','Delete record','','#000')",
                 [],
             )
             .unwrap();

@@ -8,7 +8,12 @@ import type {
   RecordAttachment,
   Task,
 } from "./domain";
-import { dayLabel, formatTime, sampleTypeLabel } from "./domain";
+import {
+  dayLabel,
+  formatTime,
+  isExperimentVisible,
+  sampleTypeLabel,
+} from "./domain";
 import {
   createExportManifest,
   beginRecordPdf,
@@ -20,8 +25,6 @@ import {
   finishRecordBundlePdf,
   cancelRecordBundlePdf,
   recordImagePreviewUrl,
-  chooseRecordImage,
-  chooseRecordFiles,
   chooseWorkspaceBackup,
   deleteProtocol,
   deleteRecord,
@@ -29,12 +32,11 @@ import {
   loadStore,
   markExportPrintRequested,
   exportWorkspaceBackup,
-  insertRecordImage,
-  insertRecordFiles,
   openRecordAttachment,
   saveRecordAttachmentAs,
   restoreWorkspaceBackup,
   saveExperimentGraphPng,
+  saveExperiment,
   saveTask,
   uid,
   updateRecordBody,
@@ -45,13 +47,12 @@ import {
   experimentGraphPngFileName,
   renderExperimentGraphPng,
 } from "./experimentGraphPng";
+import { RecordFiles } from "./RecordFiles";
 import { RecordBody } from "./RecordBody";
 import { TaskDrawer } from "./RecordCreationDrawer";
 import { recordPdfBlocks, renderRecordPdf } from "./recordPdf";
 import {
-  attachmentLabelFromPath,
   insertFileReferences,
-  imageCaptionFromPath,
   insertImageReference,
   parseRecordBody,
 } from "./recordBodyFormat";
@@ -66,6 +67,7 @@ import {
   ProtocolCreationWizard,
   ProtocolTemplateEditor,
 } from "./ProtocolEditor";
+import { AppUpdater } from "./AppUpdater";
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 64;
@@ -115,6 +117,7 @@ export default function App() {
   const [page, setPage] = useState<NavPage>("calendar");
   const [selectedTask, setSelectedTask] = useState<Task>();
   const [taskForm, setTaskForm] = useState<Task>();
+  const [recordSection, setRecordSection] = useState<"body" | "files">("body");
   const [openedRecordId, setOpenedRecordId] = useState<string>();
   const [week, setWeek] = useState(() => startOfWeek(new Date()));
   // Keep the week the user is viewing when the store refreshes.  Selecting
@@ -137,6 +140,7 @@ export default function App() {
   ] as const;
   return (
     <main className="app-shell" data-build-marker="task-crud-current">
+      <AppUpdater />
       <aside className="sidebar">
         <div className="brand">
           <span>✦</span>LabFlow
@@ -180,14 +184,22 @@ export default function App() {
         />
       )}
       {page === "experiments" && (
-        <ExperimentsPage store={store} openTask={setSelectedTask} />
+        <ExperimentsPage
+          store={store}
+          openTask={setSelectedTask}
+          changed={load}
+        />
       )}
       {page === "records" && (
         <RecordsPage
           store={store}
           openedRecordId={openedRecordId}
+          initialSection={recordSection}
           closeRecord={() => setOpenedRecordId(undefined)}
-          openRecord={setOpenedRecordId}
+          openRecord={(id) => {
+            setRecordSection("body");
+            setOpenedRecordId(id);
+          }}
           changed={load}
         />
       )}
@@ -208,7 +220,8 @@ export default function App() {
             setTaskForm(selectedTask);
             setSelectedTask(undefined);
           }}
-          openRecord={() => {
+          openRecord={(section = "body") => {
+            setRecordSection(section);
             setOpenedRecordId(selectedTask.recordId);
             setSelectedTask(undefined);
             setPage("records");
@@ -419,6 +432,13 @@ function Calendar({
   openExisting: (task: Task) => void;
   create: () => void;
 }) {
+  const visibleExperimentIds = useMemo(
+    () =>
+      new Set(
+        store.experiments.filter(isExperimentVisible).map((item) => item.id),
+      ),
+    [store.experiments],
+  );
   const days = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(week, i)),
     [week],
@@ -461,7 +481,11 @@ function Calendar({
           <Day
             key={day.toISOString()}
             day={day}
-            tasks={store.tasks.filter((t) => sameDate(t.start, day))}
+            tasks={store.tasks.filter(
+              (task) =>
+                visibleExperimentIds.has(task.experimentId) &&
+                sameDate(task.start, day),
+            )}
             experiments={store.experiments}
             open={openExisting}
           />
@@ -513,7 +537,15 @@ function Day({
             onClick={() => open(task)}
           >
             <i className={`dot ${task.status}`} />
-            <b>{task.title}</b>
+            <b>
+              {task.title}
+              {task.recordId && (
+                <small className="task-record-indicator" title="已有实验记录">
+                  {" "}
+                  ▧
+                </small>
+              )}
+            </b>
             <span>
               {experiment?.title || "未归属实验"} · {formatTime(task.start)}
             </span>
@@ -527,11 +559,15 @@ function Day({
 function ExperimentsPage({
   store,
   openTask,
+  changed,
 }: {
   store: Store;
   openTask: (task: Task) => void;
+  changed: () => void;
 }) {
   const [selectedExperimentId, setSelectedExperimentId] = useState<string>();
+  const [showHidden, setShowHidden] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [exportingGraph, setExportingGraph] = useState(false);
   const [graphExportMessage, setGraphExportMessage] = useState("");
   const selectedExperiment = store.experiments.find(
@@ -546,6 +582,12 @@ function ExperimentsPage({
     () => buildTaskGraph(experimentTasks),
     [experimentTasks],
   );
+  const hiddenCount = store.experiments.filter(
+    (experiment) => !isExperimentVisible(experiment),
+  ).length;
+  const listedExperiments = showHidden
+    ? store.experiments
+    : store.experiments.filter(isExperimentVisible);
 
   if (!selectedExperiment) {
     return (
@@ -558,9 +600,17 @@ function ExperimentsPage({
               查看每个 Experiment 内 Task 的只读网状关系。
             </p>
           </div>
+          {hiddenCount > 0 && (
+            <button
+              className="secondary"
+              onClick={() => setShowHidden((current) => !current)}
+            >
+              {showHidden ? "收起隐藏项" : `管理隐藏项 (${hiddenCount})`}
+            </button>
+          )}
         </header>
         <div className="experiment-grid">
-          {store.experiments.map((experiment) => {
+          {listedExperiments.map((experiment) => {
             const tasks = store.tasks
               .filter((task) => task.experimentId === experiment.id)
               .sort((left, right) => left.start.localeCompare(right.start));
@@ -580,7 +630,7 @@ function ExperimentsPage({
               : 0;
             return (
               <button
-                className="experiment-card experiment-open"
+                className={`experiment-card experiment-open ${experiment.hidden ? "experiment-hidden" : ""}`}
                 key={experiment.id}
                 onClick={() => setSelectedExperimentId(experiment.id)}
               >
@@ -590,6 +640,9 @@ function ExperimentsPage({
                   <b>查看网络 →</b>
                 </div>
                 <h2>{experiment.title}</h2>
+                {experiment.hidden && (
+                  <span className="experiment-hidden-badge">已隐藏</span>
+                )}
                 <p>{experiment.description || "暂无实验描述。"}</p>
                 <div className="progress">
                   <span>
@@ -608,8 +661,12 @@ function ExperimentsPage({
               </button>
             );
           })}
-          {store.experiments.length === 0 && (
-            <div className="empty">暂无 Experiment。</div>
+          {listedExperiments.length === 0 && (
+            <div className="empty">
+              {hiddenCount > 0
+                ? "当前没有显示中的 Experiment，可通过“管理隐藏项”恢复。"
+                : "暂无 Experiment。"}
+            </div>
           )}
         </div>
       </section>
@@ -686,6 +743,9 @@ function ExperimentsPage({
         </div>
         <div className="experiment-detail-actions">
           <span className="readonly-badge">只读 Task 网络</span>
+          <button className="secondary" onClick={() => setEditing(true)}>
+            编辑 Experiment
+          </button>
           <button
             className="secondary"
             disabled={experimentTasks.length === 0 || exportingGraph}
@@ -810,7 +870,89 @@ function ExperimentsPage({
         连线来自已保存的 Task 上级关系；点击节点可打开现有 Task
         详情。本图不会修改任何关系。
       </p>
+      {editing && (
+        <ExperimentSettingsModal
+          experiment={selectedExperiment}
+          cancel={() => setEditing(false)}
+          saved={(updated) => {
+            setEditing(false);
+            if (updated.hidden) setSelectedExperimentId(undefined);
+            changed();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function ExperimentSettingsModal({
+  experiment,
+  cancel,
+  saved,
+}: {
+  experiment: Experiment;
+  cancel: () => void;
+  saved: (experiment: Experiment) => void;
+}) {
+  const [title, setTitle] = useState(experiment.title);
+  const [hidden, setHidden] = useState(Boolean(experiment.hidden));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const nextTitle = title.trim();
+    if (!nextTitle) return setError("Experiment 名称是必填项。");
+    setSaving(true);
+    setError("");
+    const updated = { ...experiment, title: nextTitle, hidden };
+    try {
+      await saveExperiment(updated);
+      saved(updated);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="overlay centered">
+      <form className="modal task-form experiment-settings" onSubmit={submit}>
+        <button className="close" type="button" onClick={cancel}>
+          ×
+        </button>
+        <p className="eyebrow">EXPERIMENT SETTINGS</p>
+        <h2>编辑 Experiment</h2>
+        <p>名称修改后，Task、Record、样本视图和后续导出会显示新名称。</p>
+        <label>
+          Experiment 名称
+          <input
+            autoFocus
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+        </label>
+        <label className="experiment-visibility-option">
+          <input
+            type="checkbox"
+            checked={hidden}
+            onChange={(event) => setHidden(event.target.checked)}
+          />
+          <span>
+            <b>隐藏这个 Experiment</b>
+            <small>同时从日历、Experiment 列表和新建任务选项中隐藏。</small>
+          </span>
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        <footer>
+          <button type="button" className="secondary" onClick={cancel}>
+            取消
+          </button>
+          <button className="primary" disabled={saving}>
+            {saving ? "保存中…" : "保存修改"}
+          </button>
+        </footer>
+      </form>
+    </div>
   );
 }
 
@@ -1067,17 +1209,15 @@ function ProtocolViewer({
               <div>
                 <dt>输出类型</dt>
                 <dd>
-                  {["record_one", "record_many"].includes(
-                    execution.outputMode,
-                  )
+                  {["record_one", "record_many"].includes(execution.outputMode)
                     ? execution.defaultOutputTypes?.length
                       ? `创建 Record 时填写（默认：${execution.defaultOutputTypes.join("、")}）`
                       : "创建 Record 时填写"
                     : execution.outputRules?.length
-                    ? execution.outputRules
-                        .map((rule) => `${rule.sampleType} × ${rule.count}`)
-                        .join("、")
-                    : execution.outputType || "与输入相同 / 不适用"}
+                      ? execution.outputRules
+                          .map((rule) => `${rule.sampleType} × ${rule.count}`)
+                          .join("、")
+                      : execution.outputType || "与输入相同 / 不适用"}
                 </dd>
               </div>
               <div>
@@ -1159,12 +1299,14 @@ function ProtocolViewer({
 function RecordsPage({
   store,
   openedRecordId,
+  initialSection,
   closeRecord,
   openRecord,
   changed,
 }: {
   store: Store;
   openedRecordId?: string;
+  initialSection: "body" | "files";
   closeRecord: () => void;
   openRecord: (id: string) => void;
   changed: () => void;
@@ -1225,11 +1367,24 @@ function RecordsPage({
   const [bodyDraft, setBodyDraft] = useState("");
   const [bodyError, setBodyError] = useState("");
   const [savingBody, setSavingBody] = useState(false);
-  const [insertingImage, setInsertingImage] = useState(false);
-  const [insertingFile, setInsertingFile] = useState(false);
+  const [archivingFiles, setArchivingFiles] = useState(false);
   const [attachmentMessage, setAttachmentMessage] = useState("");
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (openedRecordId && initialSection === "files") {
+      document
+        .getElementById("record-files")
+        ?.scrollIntoView({ block: "start" });
+    }
+  }, [openedRecordId, initialSection]);
   const closeRecordView = () => {
+    if (archivingFiles) return;
+    if (
+      editingBody &&
+      bodyDraft !== (record?.renderedContent || record?.notes || "") &&
+      !window.confirm("正文尚未保存，确定放弃修改并关闭？")
+    )
+      return;
     setDeleteError("");
     setDeleteConfirmOpen(false);
     setDeleting(false);
@@ -1237,8 +1392,7 @@ function RecordsPage({
     setBodyDraft("");
     setBodyError("");
     setSavingBody(false);
-    setInsertingImage(false);
-    setInsertingFile(false);
+
     setAttachmentMessage("");
     closeRecord();
   };
@@ -1287,7 +1441,8 @@ function RecordsPage({
     }
   };
   const printExport = async () => {
-    if (!exportPreview || printMode || pdfController.current || bundleBusy) return;
+    if (!exportPreview || printMode || pdfController.current || bundleBusy)
+      return;
     const imageCount = exportPreview.records.reduce(
       (count, item) =>
         count +
@@ -1330,7 +1485,8 @@ function RecordsPage({
     }
   };
   const lowMemoryExport = async () => {
-    if (!exportPreview || pdfController.current || printMode || bundleBusy) return;
+    if (!exportPreview || pdfController.current || printMode || bundleBusy)
+      return;
     const controller = new AbortController();
     pdfController.current = controller;
     setPdfBusy(true);
@@ -1435,85 +1591,36 @@ function RecordsPage({
       setSavingBody(false);
     }
   };
-  const addImageToBody = async () => {
-    if (!record) return;
-    try {
-      const sourcePath = await chooseRecordImage();
-      if (!sourcePath) return;
-      const attachmentId = uid("attachment");
-      const selection =
-        bodyTextareaRef.current?.selectionStart ?? bodyDraft.length;
-      const inserted = insertImageReference(
-        bodyDraft,
-        selection,
-        attachmentId,
-        imageCaptionFromPath(sourcePath),
+  const insertExistingAttachment = (attachment: RecordAttachment) => {
+    if (!record || savingBody) return;
+    const content = editingBody
+      ? bodyDraft
+      : record.renderedContent || record.notes || "";
+    const position = editingBody
+      ? (bodyTextareaRef.current?.selectionStart ?? content.length)
+      : content.length;
+    const inserted = attachment.previewRelativePath
+      ? insertImageReference(
+          content,
+          position,
+          attachment.id,
+          attachment.fileName,
+        )
+      : insertFileReferences(content, position, [
+          { id: attachment.id, label: attachment.fileName },
+        ]);
+    setBodyDraft(inserted.content);
+    setEditingBody(true);
+    requestAnimationFrame(() => {
+      document
+        .getElementById("record-body")
+        ?.scrollIntoView({ block: "start" });
+      bodyTextareaRef.current?.focus();
+      bodyTextareaRef.current?.setSelectionRange(
+        inserted.cursor,
+        inserted.cursor,
       );
-      setInsertingImage(true);
-      setBodyError("");
-      await insertRecordImage({
-        id: attachmentId,
-        recordId: record.id,
-        sourcePath,
-        renderedContent: inserted.content,
-        changeId: uid("record-change"),
-        createdAt: new Date().toISOString(),
-      });
-      setBodyDraft(inserted.content);
-      changed();
-      requestAnimationFrame(() => {
-        bodyTextareaRef.current?.focus();
-        bodyTextareaRef.current?.setSelectionRange(
-          inserted.cursor,
-          inserted.cursor,
-        );
-      });
-    } catch (reason) {
-      setBodyError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setInsertingImage(false);
-    }
-  };
-  const addFilesToBody = async () => {
-    if (!record) return;
-    try {
-      const sourcePaths = await chooseRecordFiles();
-      if (!sourcePaths.length) return;
-      const files = sourcePaths.map((sourcePath) => ({
-        id: uid("attachment"),
-        sourcePath,
-        label: attachmentLabelFromPath(sourcePath),
-      }));
-      const selection =
-        bodyTextareaRef.current?.selectionStart ?? bodyDraft.length;
-      const inserted = insertFileReferences(
-        bodyDraft,
-        selection,
-        files.map(({ id, label }) => ({ id, label })),
-      );
-      setInsertingFile(true);
-      setBodyError("");
-      await insertRecordFiles({
-        recordId: record.id,
-        files: files.map(({ id, sourcePath }) => ({ id, sourcePath })),
-        renderedContent: inserted.content,
-        changeId: uid("record-change"),
-        createdAt: new Date().toISOString(),
-      });
-      setBodyDraft(inserted.content);
-      changed();
-      requestAnimationFrame(() => {
-        bodyTextareaRef.current?.focus();
-        bodyTextareaRef.current?.setSelectionRange(
-          inserted.cursor,
-          inserted.cursor,
-        );
-      });
-    } catch (reason) {
-      setBodyError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setInsertingFile(false);
-    }
+    });
   };
   const openAttachment = async (attachment: RecordAttachment) => {
     if (!record) return;
@@ -1521,7 +1628,9 @@ function RecordsPage({
     try {
       await openRecordAttachment(record.id, attachment.id);
     } catch (reason) {
-      setAttachmentMessage(reason instanceof Error ? reason.message : String(reason));
+      setAttachmentMessage(
+        reason instanceof Error ? reason.message : String(reason),
+      );
     }
   };
   const saveAttachment = async (attachment: RecordAttachment) => {
@@ -1531,11 +1640,14 @@ function RecordsPage({
       const destination = await saveRecordAttachmentAs(record.id, attachment);
       if (destination) setAttachmentMessage(`附件已保存到：${destination}`);
     } catch (reason) {
-      setAttachmentMessage(reason instanceof Error ? reason.message : String(reason));
+      setAttachmentMessage(
+        reason instanceof Error ? reason.message : String(reason),
+      );
     }
   };
   const exportBundle = async () => {
-    if (!exportPreview || bundleController.current || pdfBusy || printMode) return;
+    if (!exportPreview || bundleController.current || pdfBusy || printMode)
+      return;
     const controller = new AbortController();
     bundleController.current = controller;
     setBundleBusy(true);
@@ -1591,7 +1703,9 @@ function RecordsPage({
         try {
           await cancelRecordBundlePdf(job);
         } catch {
-          setExportError("ZIP PDF 临时文件清理失败，请重启 LabFlow 后检查保存目录。");
+          setExportError(
+            "ZIP PDF 临时文件清理失败，请重启 LabFlow 后检查保存目录。",
+          );
         }
       }
       bundleController.current = undefined;
@@ -1777,7 +1891,8 @@ function RecordsPage({
             <p>
               大量图片请选择“低内存
               PDF”：逐页保存为图像，文字不可选中复制。需要可复制文字时，可使用系统打印（最多
-              8 张图片）。“低内存 PDF＋附件 ZIP”会将同一份逐页 PDF 与所选 Records 的全部原始附件放入一个 ZIP。
+              8 张图片）。“低内存 PDF＋附件 ZIP”会将同一份逐页 PDF 与所选
+              Records 的全部原始附件放入一个 ZIP。
             </p>
             {pdfProgress && <p>{pdfProgress}</p>}
             {bundleProgress && <p>{bundleProgress}</p>}
@@ -1927,15 +2042,48 @@ function RecordsPage({
         <div className="overlay record-overlay">
           <section className="record-panel">
             <header className="record-header">
-              <button className="back" onClick={closeRecordView}>
+              <button
+                className="back"
+                disabled={archivingFiles}
+                onClick={closeRecordView}
+              >
                 ←
               </button>
               <div>
                 <h1>{record.title}</h1>
-                <p>本地实验记录 · 更新于 {record.updated}</p>
+                <p>
+                  {store.experiments.find(
+                    (item) =>
+                      item.id === taskForRecord(record.id)?.experimentId,
+                  )?.title || "实验记录"}{" "}
+                  · {recordDate(record.id)} · 更新于 {record.updated}
+                </p>
+                <div className="record-section-links">
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      document
+                        .getElementById("record-body")
+                        ?.scrollIntoView({ block: "start" })
+                    }
+                  >
+                    正文
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      document
+                        .getElementById("record-files")
+                        ?.scrollIntoView({ block: "start" })
+                    }
+                  >
+                    实验文件 · {record.attachments?.length || 0}
+                  </button>
+                </div>
               </div>
               <button
                 className="danger"
+                disabled={archivingFiles}
                 onClick={() => {
                   setDeleteError("");
                   setDeleteConfirmOpen(true);
@@ -1943,7 +2091,11 @@ function RecordsPage({
               >
                 删除记录
               </button>
-              <button className="secondary" onClick={closeRecordView}>
+              <button
+                className="secondary"
+                disabled={archivingFiles}
+                onClick={closeRecordView}
+              >
                 完成
               </button>
             </header>
@@ -1975,7 +2127,9 @@ function RecordsPage({
                       </span>
                     ))}
                     {record.outputs.map((id) => {
-                      const sample = store.samples.find((item) => item.id === id);
+                      const sample = store.samples.find(
+                        (item) => item.id === id,
+                      );
                       const details = [
                         sample?.metadata?.treatment_method
                           ? `处理方式：${String(sample.metadata.treatment_method)}`
@@ -1988,7 +2142,10 @@ function RecordsPage({
                           : "",
                       ].filter(Boolean);
                       return (
-                        <span className="sample-row output" key={`output-${id}`}>
+                        <span
+                          className="sample-row output"
+                          key={`output-${id}`}
+                        >
                           输出：{sample?.displayName || sample?.code || id}
                           {sample?.displayName && sample.code
                             ? `（${sample.code}）`
@@ -2008,7 +2165,7 @@ function RecordsPage({
                     ))}
                   </div>
                 </section>
-                <section className="record-section">
+                <section id="record-body" className="record-section">
                   <div className="section-title">
                     <div>
                       <i>02</i>
@@ -2024,7 +2181,7 @@ function RecordsPage({
                     <div className="record-body-editor">
                       <p className="muted">
                         仅修改此 Record，不影响 Protocol 模板或其他
-                        Record。插入图片或文件会立即保存当前正文。
+                        Record。请在“实验文件”中添加文件，再选择“插入正文”；点击“保存正文”后引用才会保存。
                       </p>
                       <textarea
                         aria-label="实验正文"
@@ -2032,32 +2189,16 @@ function RecordsPage({
                         value={bodyDraft}
                         onChange={(event) => setBodyDraft(event.target.value)}
                       />
-                      <div className="record-image-insert-row">
-                        <button
-                          className="secondary"
-                          disabled={savingBody || insertingImage || insertingFile}
-                          onClick={() => void addImageToBody()}
-                          type="button"
-                        >
-                          {insertingImage ? "处理图片中…" : "在光标处插入图片"}
-                        </button>
-                        <small>
-                          支持 PNG、JPEG、WebP、TIFF；大图会保留原图并生成预览。
-                        </small>
-                      </div>
-                      <div className="record-image-insert-row">
-                        <button
-                          className="secondary"
-                          disabled={savingBody || insertingImage || insertingFile}
-                          onClick={() => void addFilesToBody()}
-                          type="button"
-                        >
-                          {insertingFile ? "归档文件中…" : "在光标处插入文件"}
-                        </button>
-                        <small>
-                          可一次选择多个任意类型文件；原文件保存在 LabFlow 用户数据目录，不写入 SQLite，也不生成预览。
-                        </small>
-                      </div>
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          document
+                            .getElementById("record-files")
+                            ?.scrollIntoView({ block: "start" })
+                        }
+                      >
+                        从实验文件插入图片或附件
+                      </button>
                       <div className="record-body-live-preview">
                         <b>正文预览</b>
                         <RecordBody
@@ -2099,6 +2240,13 @@ function RecordsPage({
                     />
                   )}
                 </section>
+                <RecordFiles
+                  key={record.id}
+                  record={record}
+                  changed={changed}
+                  onInsert={insertExistingAttachment}
+                  onBusy={setArchivingFiles}
+                />
                 {!!record.analysisSections?.length && (
                   <section className="record-section record-analysis-sections">
                     <div className="section-title">
@@ -2204,6 +2352,11 @@ function TaskModal({
     [end, setEnd] = useState(task.end.slice(0, 16)),
     [error, setError] = useState("");
   const editing = Boolean(task.title);
+  const availableExperiments = experiments.filter(
+    (experiment) =>
+      isExperimentVisible(experiment) ||
+      (editing && experiment.id === task.experimentId),
+  );
   const parentTaskOptions = eligibleParentTaskOptions(
     tasks,
     experimentId,
@@ -2289,7 +2442,7 @@ function TaskModal({
               }}
             >
               <option value="">选择已有 Experiment</option>
-              {experiments.map((e) => (
+              {availableExperiments.map((e) => (
                 <option value={e.id} key={e.id}>
                   {e.title}
                 </option>

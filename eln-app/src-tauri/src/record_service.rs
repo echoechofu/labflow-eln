@@ -668,7 +668,7 @@ mod tests {
 
     fn seed_record(connection: &Connection) {
         connection.execute_batch("
-            INSERT INTO experiments VALUES ('e','EXP','Main','','#000');
+            INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Main','','#000');
             INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,updated_at) VALUES ('t','e','T','2026-08-26T09:00','2026-08-26T10:00','planned','2026-08-26T09:00');
             INSERT INTO records (id,task_id,experiment_id,protocol_id,protocol_snapshot_json,current_data_json,updated_at) VALUES ('r','t','e','p','{\"version\":1}', '{\"renderedContent\":\"initial body\"}', '2026-08-26T09:00');
         ").unwrap();

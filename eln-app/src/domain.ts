@@ -8,7 +8,11 @@ export interface Experiment {
   title: string;
   description: string;
   color: string;
+  hidden?: boolean;
 }
+
+export const isExperimentVisible = (experiment: Experiment) =>
+  experiment.hidden !== true;
 export interface Task {
   id: string;
   experimentId: string;
@@ -170,6 +174,7 @@ export interface RecordItem {
   }[];
 }
 export interface RecordAttachment {
+  isAssayRaw?: boolean;
   id: string;
   fileName: string;
   relativePath: string;

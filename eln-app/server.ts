@@ -74,12 +74,15 @@ const writeStore = db.transaction((store: Store) => {
   ])
     db.prepare(`DELETE FROM ${table}`).run();
   for (const e of store.experiments)
-    db.prepare("INSERT INTO experiments VALUES (?,?,?,?,?)").run(
+    db.prepare(
+      "INSERT INTO experiments (id,experiment_code,title,description,color,hidden) VALUES (?,?,?,?,?,?)",
+    ).run(
       e.id,
       e.code,
       e.title,
       e.description,
       e.color,
+      e.hidden ? 1 : 0,
     );
   for (const p of store.protocols) {
     db.prepare(
@@ -200,6 +203,7 @@ const readStore = (): Store => {
         title: string;
         description: string;
         color: string;
+        hidden: number;
       }>
     ).map((x) => ({
       id: x.id,
@@ -207,6 +211,7 @@ const readStore = (): Store => {
       title: x.title,
       description: x.description,
       color: x.color,
+      hidden: Boolean(x.hidden),
     })),
     tasks: (
       db.prepare("SELECT * FROM tasks").all() as Array<{
@@ -309,6 +314,35 @@ seed();
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 app.get("/api/store", (_, res) => res.json(readStore()));
+app.put("/api/experiments/:id", (req, res) => {
+  const experiment = req.body as Store["experiments"][number];
+  if (req.params.id !== experiment.id)
+    return res.status(400).send("Experiment id does not match the request path");
+  if (!experiment.title?.trim())
+    return res.status(400).send("Experiment title cannot be empty");
+  try {
+    db.prepare(
+      `INSERT INTO experiments (id,experiment_code,title,description,color,hidden)
+       VALUES (?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET
+         experiment_code=excluded.experiment_code,
+         title=excluded.title,
+         description=excluded.description,
+         color=excluded.color,
+         hidden=excluded.hidden`,
+    ).run(
+      experiment.id,
+      experiment.code,
+      experiment.title.trim(),
+      experiment.description ?? "",
+      experiment.color ?? "#6957e8",
+      experiment.hidden ? 1 : 0,
+    );
+    return res.status(204).end();
+  } catch (cause) {
+    return res.status(400).send(cause instanceof Error ? cause.message : String(cause));
+  }
+});
 app.put("/api/store", (req, res) => {
   writeStore(req.body as Store);
   res.status(204).end();

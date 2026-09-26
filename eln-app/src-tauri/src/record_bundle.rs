@@ -171,7 +171,7 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         apply_schema(&connection).unwrap();
         connection.execute_batch(
-            "INSERT INTO experiments VALUES ('e','EXP','Main','','#000');
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Main','','#000');
              INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,updated_at) VALUES ('t','e','Task','2026-08-31T09:00','2026-08-31T10:00','completed','now');
              INSERT INTO records (id,task_id,experiment_id,protocol_id,protocol_snapshot_json,current_data_json,updated_at) VALUES ('r','t','e','p','{}','{\"title\":\"Record\"}','now');
              INSERT INTO attachments (id,record_id,file_name,relative_path,mime_type,size,created_at) VALUES ('a','r','raw.csv','files/a/raw.csv','text/csv',16,'now');",

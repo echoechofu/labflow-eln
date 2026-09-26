@@ -261,11 +261,19 @@ export async function deleteSampleAlias(id: string) {
   await invoke("delete_sample_alias", { id });
 }
 export async function saveExperiment(experiment: Experiment) {
-  desktopOnly();
-  await invoke("save_experiment", {
-    experiment,
-    changedAt: new Date().toISOString(),
+  if (isTauri()) {
+    await invoke("save_experiment", {
+      experiment,
+      changedAt: new Date().toISOString(),
+    });
+    return;
+  }
+  const response = await fetch(`/api/experiments/${encodeURIComponent(experiment.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(experiment),
   });
+  if (!response.ok) throw new Error(await response.text());
 }
 export async function deleteExperiment(id: string) {
   desktopOnly();
@@ -337,7 +345,7 @@ export async function insertRecordImage(request: {
 export async function chooseRecordFiles() {
   desktopOnly();
   const selected = await open({
-    title: "选择要插入实验记录的附件",
+    title: "选择实验文件",
     multiple: true,
     directory: false,
   });
@@ -347,6 +355,7 @@ export async function chooseRecordFiles() {
 export async function insertRecordFiles(request: {
   recordId: string;
   files: { id: string; sourcePath: string }[];
+  archiveOnly?: boolean;
   renderedContent: string;
   changeId: string;
   createdAt: string;

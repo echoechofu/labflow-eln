@@ -36,6 +36,7 @@ pub struct ExperimentDraft {
     pub title: String,
     pub description: Option<String>,
     pub color: Option<String>,
+    pub hidden: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -126,6 +127,7 @@ impl ExperimentExt for task_service::Experiment {
             "title": self.title,
             "description": self.description,
             "color": self.color,
+            "hidden": self.hidden,
         })
     }
 }
@@ -143,6 +145,7 @@ mod tests {
             title: "Main".into(),
             description: "desc".into(),
             color: "#abc".into(),
+            hidden: false,
         }
         .to_value();
         assert_eq!(value["id"], "e1");
@@ -150,6 +153,7 @@ mod tests {
         assert_eq!(value["title"], "Main");
         assert_eq!(value["description"], "desc");
         assert_eq!(value["color"], "#abc");
+        assert_eq!(value["hidden"], false);
     }
 
     #[test]

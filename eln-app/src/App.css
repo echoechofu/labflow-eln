@@ -338,6 +338,20 @@ h2 {
   border-color: #a59ced;
   box-shadow: 0 8px 22px #3b356214;
 }
+.experiment-hidden {
+  border-style: dashed;
+  opacity: 0.72;
+}
+.experiment-hidden-badge {
+  display: inline-block;
+  margin: 0 0 8px;
+  border-radius: 12px;
+  background: #efedf5;
+  color: #777184;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 700;
+}
 .experiment-open .card-top b {
   margin-left: auto;
   color: #6555d5;
@@ -367,6 +381,30 @@ h2 {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+.experiment-settings {
+  width: min(460px, calc(100vw - 40px));
+}
+.task-form .experiment-visibility-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.task-form .experiment-visibility-option input {
+  width: 17px;
+  margin: 2px 0 0;
+}
+.experiment-visibility-option span {
+  display: grid;
+  gap: 4px;
+}
+.experiment-visibility-option small {
+  color: var(--muted);
+  font-weight: 400;
+  line-height: 1.5;
 }
 .graph-export-message {
   margin: -18px 0 18px;
@@ -777,6 +815,31 @@ h2 {
   font-size: 21px;
   margin: 5px 0;
 }
+.app-update-overlay {
+  z-index: 20;
+}
+.app-update-window {
+  box-sizing: border-box;
+  width: min(460px, calc(100vw - 40px));
+}
+.app-update-window > p {
+  overflow-wrap: anywhere;
+}
+.app-update-progress {
+  height: 8px;
+  margin: 22px 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ebe9f4;
+}
+.app-update-progress i {
+  display: block;
+  height: 100%;
+  min-width: 8%;
+  border-radius: inherit;
+  background: var(--purple);
+  transition: width 160ms ease;
+}
 .picker {
   display: flex;
   align-items: center;
@@ -871,6 +934,7 @@ h2 {
   line-height: 1.45;
 }
 .record-overlay {
+  display: block;
   justify-content: stretch;
   overflow: auto;
 }
@@ -1821,4 +1885,80 @@ h2 {
   .record-image img {
     max-height: 225mm;
   }
+}
+
+.record-section-links {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.record-files {
+  scroll-margin-top: 20px;
+}
+.record-file-drop {
+  border: 2px dashed #d4d0e5;
+  border-radius: 12px;
+  padding: 22px;
+  background: #faf9fe;
+  color: #514b68;
+}
+.record-file-drop.dragging {
+  border-color: #6957e8;
+  background: #efecff;
+}
+.record-file-drop small {
+  display: block;
+  margin-top: 8px;
+  line-height: 1.6;
+}
+.record-file-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.record-files-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.record-files-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 0;
+  border-bottom: 1px solid #e8e5ef;
+}
+.record-file-summary {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.record-file-summary small {
+  display: block;
+  color: #777080;
+  margin-top: 6px;
+}
+.record-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.record-file-preview {
+  flex-basis: 100%;
+  max-width: 720px;
+}
+.record-content {
+  grid-template-columns: minmax(0, 1fr);
+}
+.record-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.record-section {
+  scroll-margin-top: 145px;
+}
+.task-record-indicator {
+  font-size: 11px;
+  opacity: 0.75;
 }

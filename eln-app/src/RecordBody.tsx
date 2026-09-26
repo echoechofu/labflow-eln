@@ -8,7 +8,7 @@ import {
   withRecordImage,
 } from "./recordImageResources";
 
-function ViewportImage({
+export function ViewportImage({
   attachment,
   caption,
 }: {
@@ -156,7 +156,9 @@ export function RecordBody({
               <div>
                 <b>{attachment.fileName}</b>
                 <small>
-                  {[attachment.mimeType, displaySize].filter(Boolean).join(" · ")}
+                  {[attachment.mimeType, displaySize]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </small>
               </div>
               {(onOpenAttachment || onSaveAttachment) && (

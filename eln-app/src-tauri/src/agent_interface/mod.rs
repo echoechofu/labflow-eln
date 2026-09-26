@@ -163,7 +163,7 @@ mod tests {
         crate::apply_schema(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('e','EXP100','Main','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP100','Main','','#000')",
                 [],
             )
             .unwrap();
@@ -339,6 +339,7 @@ mod tests {
                     title: "Fresh workspace".into(),
                     description: Some("Bootstrapped via agent".into()),
                     color: Some("#6957e8".into()),
+                    hidden: None,
                 },
                 changed_at: "2026-08-27T09:00:00+08:00".into(),
             }))

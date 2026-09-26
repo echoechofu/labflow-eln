@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS experiments (id TEXT PRIMARY KEY, experiment_code TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL, color TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS experiments (id TEXT PRIMARY KEY, experiment_code TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL, color TEXT NOT NULL, hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1)));
 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL REFERENCES experiments(id), title TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('planned','in_progress','completed')), record_id TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS tasks_id_experiment_unique ON tasks(id, experiment_id);
 CREATE TABLE IF NOT EXISTS task_relations (

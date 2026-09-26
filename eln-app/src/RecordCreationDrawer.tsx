@@ -89,7 +89,7 @@ export function TaskDrawer({
   records: Store["records"];
   close: () => void;
   edit: () => void;
-  openRecord: () => void;
+  openRecord: (section?: "body" | "files") => void;
   changed: () => void;
   protocolsChanged: () => void;
 }) {
@@ -191,15 +191,14 @@ export function TaskDrawer({
     inputMode === "existing"
       ? inputSampleIds
       : externalSamples.map((_, index) => `external:${index}`);
-  const reconcileOutputRows = (
-    current: OutputRow[],
-    sourceKeys: string[],
-  ) => {
+  const reconcileOutputRows = (current: OutputRow[], sourceKeys: string[]) => {
     if (!usesRecordOutputList) return [];
     const defaults = protocol?.execution?.defaultOutputTypes?.length
       ? protocol.execution.defaultOutputTypes
       : [""];
-    const retained = current.filter((row) => sourceKeys.includes(row.sourceKey));
+    const retained = current.filter((row) =>
+      sourceKeys.includes(row.sourceKey),
+    );
     const next = [...retained];
     sourceKeys.forEach((sourceKey) => {
       const existing = next.filter((row) => row.sourceKey === sourceKey);
@@ -490,8 +489,7 @@ export function TaskDrawer({
         return setError("自定义类型代码已经存在，请从分类列表中直接选择。");
       if (
         outputSourceKeys.some(
-          (sourceKey) =>
-            !outputRows.some((row) => row.sourceKey === sourceKey),
+          (sourceKey) => !outputRows.some((row) => row.sourceKey === sourceKey),
         )
       )
         return setError("每个输入都需要至少一个输出 Sample。");
@@ -499,7 +497,8 @@ export function TaskDrawer({
         recordOutputMode === "record_one" &&
         outputSourceKeys.some(
           (sourceKey) =>
-            outputRows.filter((row) => row.sourceKey === sourceKey).length !== 1,
+            outputRows.filter((row) => row.sourceKey === sourceKey).length !==
+            1,
         )
       )
         return setError("1 → 1 Protocol 要求每个输入恰好产生一个输出 Sample。");
@@ -510,8 +509,7 @@ export function TaskDrawer({
           .map((row) => normalizeSampleType(row.sampleType))
       : [];
     const shouldAskForDefaults =
-      (protocol.origin === "user" ||
-        protocol.activeVersionOrigin === "user") &&
+      (protocol.origin === "user" || protocol.activeVersionOrigin === "user") &&
       usesRecordOutputList &&
       !protocol.execution?.defaultOutputTypes?.length &&
       proposedDefaults.length > 0;
@@ -626,15 +624,30 @@ export function TaskDrawer({
           className="primary wide"
           onClick={
             task.recordId
-              ? openRecord
+              ? () => openRecord("body")
               : () => {
                   setProtocolQuery("");
                   setChoosingProtocol(true);
                 }
           }
         >
-          打开记录 →
+          {task.recordId ? "继续记录 →" : "开始记录 →"}
         </button>
+        <p className="muted">
+          {task.recordId
+            ? `已有实验记录 · ${records.find((item) => item.id === task.recordId)?.attachments?.length || 0} 个文件`
+            : "尚未创建实验记录"}
+        </p>
+        {task.recordId && (
+          <button
+            className="secondary wide"
+            onClick={() => openRecord("files")}
+          >
+            查看实验文件 ·{" "}
+            {records.find((item) => item.id === task.recordId)?.attachments
+              ?.length || 0}
+          </button>
+        )}
         <button className="secondary wide" onClick={edit}>
           修改任务
         </button>
@@ -790,7 +803,9 @@ export function TaskDrawer({
                                   setInputMode("external");
                                   setInputSampleIds([]);
                                   setOutputRows((current) =>
-                                    reconcileOutputRows(current, ["external:0"]),
+                                    reconcileOutputRows(current, [
+                                      "external:0",
+                                    ]),
                                   );
                                   setError("");
                                 }}
@@ -877,7 +892,10 @@ export function TaskDrawer({
                                         (_, index) => `external:${index}`,
                                       );
                                       setOutputRows((current) =>
-                                        reconcileOutputRows(current, sourceKeys),
+                                        reconcileOutputRows(
+                                          current,
+                                          sourceKeys,
+                                        ),
                                       );
                                       setExternalSamples((current) =>
                                         Array.from(
@@ -975,7 +993,8 @@ export function TaskDrawer({
                     <fieldset className="record-output-list">
                       <legend>2. 本次实际产生的 Sample</legend>
                       <p className="form-hint">
-                        一行代表一个真实 Sample。类型描述材料是什么；处理方式和时间记录本次差异。
+                        一行代表一个真实
+                        Sample。类型描述材料是什么；处理方式和时间记录本次差异。
                       </p>
                       {outputSourceKeys.map((sourceKey) => {
                         const sourceIndex = outputSourceKeys.indexOf(sourceKey);
@@ -987,7 +1006,10 @@ export function TaskDrawer({
                           (row) => row.sourceKey === sourceKey,
                         );
                         return (
-                          <section className="record-output-source" key={sourceKey}>
+                          <section
+                            className="record-output-source"
+                            key={sourceKey}
+                          >
                             <header>
                               <span>来源 Sample</span>
                               <b>
@@ -1021,7 +1043,9 @@ export function TaskDrawer({
                                           : row.sampleType
                                       }
                                       onChange={(event) => {
-                                        if (event.target.value === "__CUSTOM__") {
+                                        if (
+                                          event.target.value === "__CUSTOM__"
+                                        ) {
                                           update({
                                             isCustomType: true,
                                             sampleType: "",
@@ -1039,13 +1063,17 @@ export function TaskDrawer({
                                     >
                                       <option value="">请选择</option>
                                       {outputTypeGroups.map((group) => (
-                                        <optgroup label={group.label} key={group.label}>
+                                        <optgroup
+                                          label={group.label}
+                                          key={group.label}
+                                        >
                                           {group.items.map((item) => (
                                             <option
                                               value={item.canonicalType}
                                               key={item.canonicalType}
                                             >
-                                              {item.displayName} · {item.canonicalType}
+                                              {item.displayName} ·{" "}
+                                              {item.canonicalType}
                                             </option>
                                           ))}
                                         </optgroup>
@@ -1067,7 +1095,9 @@ export function TaskDrawer({
                                       <label>
                                         通用类型名称
                                         <input
-                                          value={row.sampleTypeDisplayName || ""}
+                                          value={
+                                            row.sampleTypeDisplayName || ""
+                                          }
                                           placeholder="填写通用类型名称"
                                           onChange={(event) =>
                                             update({
@@ -1092,7 +1122,8 @@ export function TaskDrawer({
                                         />
                                       </label>
                                       <small>
-                                        1–32 位，以英文字母开头，仅使用大写字母、数字和下划线。
+                                        1–32
+                                        位，以英文字母开头，仅使用大写字母、数字和下划线。
                                       </small>
                                     </div>
                                   )}
@@ -1102,7 +1133,9 @@ export function TaskDrawer({
                                       value={row.displayName || ""}
                                       placeholder="留空则自动生成"
                                       onChange={(event) =>
-                                        update({ displayName: event.target.value })
+                                        update({
+                                          displayName: event.target.value,
+                                        })
                                       }
                                     />
                                   </label>

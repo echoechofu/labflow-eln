@@ -80,7 +80,7 @@ pub fn get_experiment(
 ) -> Result<Option<Experiment>, ExperimentServiceError> {
     let row = connection
         .query_row(
-            "SELECT id,experiment_code,title,description,color FROM experiments WHERE id=?1",
+            "SELECT id,experiment_code,title,description,color,hidden FROM experiments WHERE id=?1",
             [id],
             |row| {
                 Ok(Experiment {
@@ -89,6 +89,7 @@ pub fn get_experiment(
                     title: row.get(2)?,
                     description: row.get(3)?,
                     color: row.get(4)?,
+                    hidden: row.get(5)?,
                 })
             },
         )
@@ -138,10 +139,11 @@ pub fn save_experiment(
         .get("color")
         .and_then(Value::as_str)
         .unwrap_or("#6957e8");
+    let requested_hidden = experiment.get("hidden").and_then(Value::as_bool);
     let transaction = connection.transaction()?;
     let existing: Option<Value> = transaction
         .query_row(
-            "SELECT experiment_code,title,description,color FROM experiments WHERE id=?1",
+            "SELECT experiment_code,title,description,color,hidden FROM experiments WHERE id=?1",
             [&id],
             |row| {
                 Ok(json!({
@@ -149,13 +151,25 @@ pub fn save_experiment(
                     "title": row.get::<_, String>(1)?,
                     "description": row.get::<_, String>(2)?,
                     "color": row.get::<_, String>(3)?,
+                    "hidden": row.get::<_, bool>(4)?,
                 }))
             },
         )
         .optional()?;
+    let hidden = requested_hidden.unwrap_or_else(|| {
+        existing
+            .as_ref()
+            .and_then(|value| value.get("hidden"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    let mut audited_experiment = experiment.clone();
+    if let Some(object) = audited_experiment.as_object_mut() {
+        object.insert("hidden".into(), json!(hidden));
+    }
     transaction.execute(
-        "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET experiment_code=excluded.experiment_code,title=excluded.title,description=excluded.description,color=excluded.color",
-        params![id, code, title, description, color],
+        "INSERT INTO experiments (id,experiment_code,title,description,color,hidden) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET experiment_code=excluded.experiment_code,title=excluded.title,description=excluded.description,color=excluded.color,hidden=excluded.hidden",
+        params![id, code, title, description, color, hidden],
     )?;
     lineage::audit(
         &transaction,
@@ -164,7 +178,7 @@ pub fn save_experiment(
         &id,
         "$",
         existing.unwrap_or(json!(null)),
-        experiment.clone(),
+        audited_experiment,
         changed_at,
     )?;
     transaction.commit()?;
@@ -174,6 +188,7 @@ pub fn save_experiment(
         title,
         description: description.to_owned(),
         color: color.to_owned(),
+        hidden,
     })
 }
 
@@ -216,7 +231,7 @@ mod tests {
         let mut connection = fresh();
         let saved = save_experiment(
             &mut connection,
-            json!({"id": "e1", "code": "EXP-001", "title": "Main", "description": "desc", "color": "#abc"}),
+            json!({"id": "e1", "code": "EXP-001", "title": "Main", "description": "desc", "color": "#abc", "hidden": true}),
             "2026-08-26T09:00:00Z",
         )
         .unwrap();
@@ -224,6 +239,20 @@ mod tests {
         let fetched = get_experiment(&connection, "e1").unwrap().unwrap();
         assert_eq!(fetched.title, "Main");
         assert_eq!(fetched.color, "#abc");
+        assert!(fetched.hidden);
+
+        save_experiment(
+            &mut connection,
+            json!({"id": "e1", "code": "EXP-001", "title": "Renamed", "description": "desc", "color": "#abc"}),
+            "2026-08-26T10:00:00Z",
+        )
+        .unwrap();
+        let renamed = get_experiment(&connection, "e1").unwrap().unwrap();
+        assert_eq!(renamed.title, "Renamed");
+        assert!(
+            renamed.hidden,
+            "an omitted visibility flag keeps its prior value"
+        );
     }
 
     #[test]

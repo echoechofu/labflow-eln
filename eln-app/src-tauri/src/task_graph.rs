@@ -141,13 +141,13 @@ mod tests {
         crate::apply_schema(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('e','EXP100','Graph','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP100','Graph','','#000')",
                 [],
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('other','EXP101','Other','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('other','EXP101','Other','','#000')",
                 [],
             )
             .unwrap();

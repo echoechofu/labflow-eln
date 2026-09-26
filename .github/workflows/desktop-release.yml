@@ -1,0 +1,143 @@
+name: Build and publish macOS release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Public labflow-releases tag; must match the app version
+        required: true
+        default: v0.1.7
+        type: string
+      release_notes:
+        description: Release notes shown in GitHub and the in-app update prompt
+        required: true
+        default: LabFlow 功能更新与稳定性改进。
+        type: string
+      publish:
+        description: Publish verified files and latest.json to labflow-releases
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: version
+        working-directory: eln-app
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "${{ inputs.release_tag }}" = "v$version" || {
+            echo "release_tag must be v$version" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-macos:
+    needs: verify-version
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: eln-app
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.LABFLOW_UPDATER_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: eln-app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - run: npm ci
+      - name: Run application checks
+        run: |
+          npm run lint
+          npm test
+          cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build ad-hoc signed app and updater archive
+        run: npm run tauri:build
+      - name: Stage macOS release files
+        env:
+          VERSION: ${{ needs.verify-version.outputs.version }}
+        run: |
+          output="release/macos-aarch64"
+          bundle="src-tauri/target/release/bundle/macos"
+          mkdir -p "$output"
+          cp "$bundle/LabFlow-$VERSION-Apple-Silicon.zip" "$output/"
+          cp "$bundle/LabFlow-$VERSION-Apple-Silicon.dmg" "$output/"
+          updater=$(find "$bundle" -maxdepth 1 -name '*.app.tar.gz' -print -quit)
+          test -n "$updater"
+          updater_name="LabFlow-$VERSION-darwin-aarch64.app.tar.gz"
+          cp "$updater" "$output/$updater_name"
+          cp "$updater.sig" "$output/$updater_name.sig"
+          (cd "$output" && shasum -a 256 * > SHA256SUMS-macOS-aarch64.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LabFlow-${{ inputs.release_tag }}-macOS-aarch64
+          path: eln-app/release/macos-aarch64/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    if: ${{ inputs.publish }}
+    needs: [verify-version, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: LabFlow-${{ inputs.release_tag }}-macOS-aarch64
+          path: release
+          merge-multiple: true
+      - name: Generate signed update manifest
+        working-directory: eln-app
+        env:
+          LABFLOW_RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
+          LABFLOW_RELEASE_TAG: ${{ inputs.release_tag }}
+          LABFLOW_RELEASE_REPOSITORY: echoechofu/labflow-releases
+          LABFLOW_RELEASE_NOTES: ${{ inputs.release_notes }}
+          LABFLOW_UPDATE_MANIFEST: ../release/latest.json
+          LABFLOW_DARWIN_UPDATE_FILE: LabFlow-${{ needs.verify-version.outputs.version }}-darwin-aarch64.app.tar.gz
+          LABFLOW_DARWIN_SIGNATURE: ../release/LabFlow-${{ needs.verify-version.outputs.version }}-darwin-aarch64.app.tar.gz.sig
+        run: node scripts/create-updater-manifest.mjs
+      - name: Publish public GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.LABFLOW_RELEASES_TOKEN }}
+          RELEASE_REPOSITORY: echoechofu/labflow-releases
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        shell: bash
+        run: |
+          test -n "$GH_TOKEN" || { echo "LABFLOW_RELEASES_TOKEN is required" >&2; exit 1; }
+          if ! gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$RELEASE_REPOSITORY" \
+              --title "LabFlow $RELEASE_TAG" \
+              --notes "$RELEASE_NOTES"
+          fi
+          gh release upload "$RELEASE_TAG" release/* \
+            --repo "$RELEASE_REPOSITORY" \
+            --clobber

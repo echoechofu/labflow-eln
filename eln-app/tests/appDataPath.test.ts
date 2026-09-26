@@ -28,7 +28,7 @@ test('fresh migration creates SQLite outside project source directory', () => {
 
 test('legacy project database migrates without losing data', () => {
   const root = fixture(); const legacy = join(root, 'project', 'data', 'labflow.sqlite'); mkdirSync(join(root, 'project', 'data'), { recursive: true })
-  const old = openDatabase(legacy); old.prepare('INSERT INTO experiments VALUES (?,?,?,?,?)').run('e1', 'E001', 'Preserved experiment', '', '#000'); old.close()
+  const old = openDatabase(legacy); old.prepare('INSERT INTO experiments (id,experiment_code,title,description,color) VALUES (?,?,?,?,?)').run('e1', 'E001', 'Preserved experiment', '', '#000'); old.close()
   const paths = appDataPaths({ getAppDataDir: () => join(root, 'user-data', 'LabFlow') })
   const result = migrateLegacyDatabase(paths, legacy, validateDatabase)
   assert.equal(result.migrated, true); assert.equal(existsSync(paths.getDatabasePath()), true)
@@ -38,7 +38,7 @@ test('legacy project database migrates without losing data', () => {
 test('restart uses the same user database and source build cleanup cannot remove it', () => {
   const root = fixture(); const project = join(root, 'project'); const build = join(project, 'dist'); mkdirSync(build, { recursive: true })
   const paths = appDataPaths({ getAppDataDir: () => join(root, 'user-data', 'LabFlow') }); paths.ensureUserDataDirectories()
-  const first = openDatabase(paths.getDatabasePath()); first.prepare('INSERT INTO experiments VALUES (?,?,?,?,?)').run('e2', 'E002', 'Restart check', '', '#000'); first.close()
+  const first = openDatabase(paths.getDatabasePath()); first.prepare('INSERT INTO experiments (id,experiment_code,title,description,color) VALUES (?,?,?,?,?)').run('e2', 'E002', 'Restart check', '', '#000'); first.close()
   rmSync(build, { recursive: true, force: true })
   const second = new Database(paths.getDatabasePath(), { readonly: true }); assert.equal((second.prepare('SELECT count(*) AS count FROM experiments').get() as { count: number }).count, 1); second.close()
 })

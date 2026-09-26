@@ -1046,7 +1046,7 @@ mod tests {
         crate::apply_schema(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP777','Assay','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP777','Assay','','#000')",
                 [],
             )
             .unwrap();

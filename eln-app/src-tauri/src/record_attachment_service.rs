@@ -46,6 +46,8 @@ pub struct InsertRecordFilesRequest {
     pub rendered_content: String,
     pub change_id: String,
     pub created_at: String,
+    #[serde(default)]
+    pub archive_only: bool,
 }
 
 #[derive(Debug)]
@@ -342,7 +344,7 @@ pub fn insert_record_files(
             "Change id contains unsupported characters.".into(),
         ));
     }
-    if request.rendered_content.trim().is_empty() {
+    if !request.archive_only && request.rendered_content.trim().is_empty() {
         return Err(RecordServiceError::Validation(
             "Record body cannot be empty.".into(),
         ));
@@ -353,9 +355,10 @@ pub fn insert_record_files(
                 "Attachment id contains unsupported characters.".into(),
             ));
         }
-        if !request
-            .rendered_content
-            .contains(&format!("labflow-file://{}", source.id))
+        if !request.archive_only
+            && !request
+                .rendered_content
+                .contains(&format!("labflow-file://{}", source.id))
         {
             return Err(RecordServiceError::Validation(
                 "Record body must contain every inserted file reference.".into(),
@@ -380,7 +383,7 @@ pub fn insert_record_files(
 
     fs::create_dir_all(files_root)
         .map_err(|error| RecordServiceError::Persistence(error.to_string()))?;
-    let mut attachments = Vec::with_capacity(request.files.len());
+    let mut attachments: Vec<RecordAttachment> = Vec::with_capacity(request.files.len());
     let mut created_directories: Vec<PathBuf> = Vec::with_capacity(request.files.len());
     for item in &request.files {
         let source = PathBuf::from(&item.source_path);
@@ -437,6 +440,51 @@ pub fn insert_record_files(
                 return Err(error);
             }
         };
+        if request.archive_only {
+            let duplicate: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM attachments WHERE record_id=?1 AND content_sha256=?2)",
+                params![request.record_id, content_sha256],
+                |row| row.get(0),
+            )?;
+            if duplicate
+                || attachments
+                    .iter()
+                    .any(|item| item.content_sha256.as_deref() == Some(content_sha256.as_str()))
+            {
+                for path in &created_directories {
+                    remove_created_directory(path);
+                }
+                return Err(RecordServiceError::Conflict(
+                    "本次记录中已存在内容相同的文件，请勿重复导入。".into(),
+                ));
+            }
+        }
+        let mut preview_relative_path = None;
+        let mut width_px = None;
+        let mut height_px = None;
+        if request.archive_only {
+            // Preview is optional: an unsupported or damaged image remains a usable original file.
+            let preview = (|| {
+                let reader = ImageReader::open(&original_path)
+                    .ok()?
+                    .with_guessed_format()
+                    .ok()?;
+                image_details(reader.format()?)?;
+                let image = reader.decode().ok()?;
+                let dimensions = (image.width(), image.height());
+                image
+                    .thumbnail(PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE)
+                    .to_rgba8()
+                    .save_with_format(directory.join("preview.png"), ImageFormat::Png)
+                    .ok()?;
+                Some(dimensions)
+            })();
+            if let Some((width, height)) = preview {
+                preview_relative_path = Some(format!("files/{}/preview.png", item.id));
+                width_px = Some(width as i64);
+                height_px = Some(height as i64);
+            }
+        }
         attachments.push(RecordAttachment {
             id: item.id.clone(),
             file_name,
@@ -444,9 +492,9 @@ pub fn insert_record_files(
             mime_type: Some(mime_type_for_file(&source).into()),
             size: Some(metadata.len() as i64),
             content_sha256: Some(content_sha256),
-            preview_relative_path: None,
-            width_px: None,
-            height_px: None,
+            preview_relative_path,
+            width_px,
+            height_px,
         });
     }
 
@@ -454,13 +502,19 @@ pub fn insert_record_files(
         .get("renderedContent")
         .cloned()
         .unwrap_or(Value::Null);
-    let new_content = json!(request.rendered_content);
-    current["renderedContent"] = new_content.clone();
+    let new_content = if request.archive_only {
+        old_content.clone()
+    } else {
+        json!(request.rendered_content)
+    };
+    if !request.archive_only {
+        current["renderedContent"] = new_content.clone();
+    }
     let transaction_result = (|| {
         let transaction = connection.transaction()?;
         for attachment in &attachments {
             transaction.execute(
-                "INSERT INTO attachments (id,record_id,file_name,relative_path,mime_type,size,created_at,content_sha256) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO attachments (id,record_id,file_name,relative_path,mime_type,size,created_at,content_sha256,preview_relative_path,width_px,height_px) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                 params![
                     attachment.id,
                     request.record_id,
@@ -470,6 +524,7 @@ pub fn insert_record_files(
                     attachment.size,
                     request.created_at,
                     attachment.content_sha256,
+                    attachment.preview_relative_path, attachment.width_px, attachment.height_px,
                 ],
             )?;
         }
@@ -477,10 +532,17 @@ pub fn insert_record_files(
             "UPDATE records SET current_data_json=?2,updated_at=?3 WHERE id=?1",
             params![request.record_id, current.to_string(), request.created_at],
         )?;
-        transaction.execute(
+        if !request.archive_only {
+            transaction.execute(
             "INSERT INTO record_changes (id,record_id,field_path,old_value_json,new_value_json,actor_id,changed_at) VALUES (?1,?2,'renderedContent',?3,?4,'local_user',?5)",
             params![request.change_id, request.record_id, old_content.to_string(), new_content.to_string(), request.created_at],
         )?;
+        } else {
+            transaction.execute(
+                "INSERT INTO record_changes (id,record_id,field_path,old_value_json,new_value_json,actor_id,changed_at) VALUES (?1,?2,'attachments', 'null',?3,'local_user',?4)",
+                params![request.change_id, request.record_id, serde_json::to_string(&attachments).map_err(|error| RecordServiceError::Persistence(error.to_string()))?, request.created_at],
+            )?;
+        }
         transaction.commit()?;
         Ok::<(), RecordServiceError>(())
     })();
@@ -664,7 +726,7 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         apply_schema(&connection).unwrap();
         connection.execute_batch(
-            "INSERT INTO experiments VALUES ('e','EXP','Main','','#000');
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Main','','#000');
              INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,updated_at) VALUES ('t','e','Task','2026-08-31T09:00','2026-08-31T10:00','completed','now');
              INSERT INTO records (id,task_id,experiment_id,protocol_id,protocol_snapshot_json,current_data_json,updated_at) VALUES ('r','t','e','p','{}','{\"renderedContent\":\"before\"}','now');",
         ).unwrap();
@@ -735,6 +797,7 @@ mod tests {
         fs::write(&source, b"well,value\nA1,0.42\n").unwrap();
         let mut connection = seeded_connection();
         let request = InsertRecordFilesRequest {
+            archive_only: false,
             record_id: "r".into(),
             files: vec![RecordFileSource {
                 id: "attachment-csv".into(),
@@ -763,6 +826,128 @@ mod tests {
             &root.join("leak.csv")
         )
         .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_preserves_body_rejects_duplicates_and_keeps_same_names() {
+        let root = workspace("archive-files");
+        fs::create_dir_all(root.join("other")).unwrap();
+        let source = root.join("data.csv");
+        fs::write(&source, b"original data").unwrap();
+        let mut connection = seeded_connection();
+        let mut request = InsertRecordFilesRequest {
+            archive_only: true,
+            record_id: "r".into(),
+            files: vec![RecordFileSource {
+                id: "file-one".into(),
+                source_path: source.to_string_lossy().into_owned(),
+            }],
+            rendered_content: "must never replace body".into(),
+            change_id: "archive-one".into(),
+            created_at: "now".into(),
+        };
+        let files = root.join("files");
+        let first = insert_record_files(&mut connection, &files, &request).unwrap();
+        let body: String = connection
+            .query_row(
+                "SELECT current_data_json FROM records WHERE id='r'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["renderedContent"],
+            "before"
+        );
+        request.files[0].id = "duplicate".into();
+        request.change_id = "archive-two".into();
+        assert!(insert_record_files(&mut connection, &files, &request).is_err());
+        assert!(!files.join("duplicate").exists());
+        let other = root.join("other/data.csv");
+        fs::write(&other, b"different data").unwrap();
+        request.files[0].source_path = other.to_string_lossy().into_owned();
+        let second = insert_record_files(&mut connection, &files, &request).unwrap();
+        assert_eq!(first[0].file_name, second[0].file_name);
+        assert_ne!(first[0].relative_path, second[0].relative_path);
+        assert_eq!(
+            fs::read(root.join(&first[0].relative_path)).unwrap(),
+            b"original data"
+        );
+        let history: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM record_changes WHERE field_path='attachments'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(history, 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_image_has_bounded_preview_without_body_reference() {
+        let root = workspace("archive-image");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("image.png");
+        image::ImageBuffer::<image::Rgb<u8>, Vec<u8>>::new(1600, 10)
+            .save(&source)
+            .unwrap();
+        let mut connection = seeded_connection();
+        let request = InsertRecordFilesRequest {
+            archive_only: true,
+            record_id: "r".into(),
+            files: vec![RecordFileSource {
+                id: "image-one".into(),
+                source_path: source.to_string_lossy().into_owned(),
+            }],
+            rendered_content: "".into(),
+            change_id: "image-archive".into(),
+            created_at: "now".into(),
+        };
+        let attachments =
+            insert_record_files(&mut connection, &root.join("files"), &request).unwrap();
+        assert_eq!(attachments[0].width_px, Some(1600));
+        assert!(attachments[0].preview_relative_path.is_some());
+        assert_eq!(
+            fs::read(source).unwrap(),
+            fs::read(root.join(&attachments[0].relative_path)).unwrap()
+        );
+        let preview = load_image_preview(&connection, &root, "image-one").unwrap();
+        assert!(image::load_from_memory(&preview.bytes).unwrap().width() <= PREVIEW_MAX_EDGE);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_batch_failure_rolls_back_files_and_metadata() {
+        let root = workspace("archive-rollback");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("data.csv");
+        fs::write(&source, b"data").unwrap();
+        let mut connection = seeded_connection();
+        let request = InsertRecordFilesRequest {
+            archive_only: true,
+            record_id: "r".into(),
+            files: vec![
+                RecordFileSource {
+                    id: "first".into(),
+                    source_path: source.to_string_lossy().into_owned(),
+                },
+                RecordFileSource {
+                    id: "missing".into(),
+                    source_path: root.join("missing.csv").to_string_lossy().into_owned(),
+                },
+            ],
+            rendered_content: "".into(),
+            change_id: "rollback".into(),
+            created_at: "now".into(),
+        };
+        assert!(insert_record_files(&mut connection, &root.join("files"), &request).is_err());
+        assert!(!root.join("files/first").exists());
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
         fs::remove_dir_all(root).unwrap();
     }
 

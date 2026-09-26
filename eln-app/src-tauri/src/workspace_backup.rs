@@ -556,7 +556,7 @@ mod tests {
             .unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP001',?1,'','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP001',?1,'','#000')",
                 [title],
             )
             .unwrap();

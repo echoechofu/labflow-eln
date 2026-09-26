@@ -162,7 +162,7 @@ mod tests {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         crate::apply_schema(&connection).unwrap();
         connection.execute_batch(
-            "INSERT INTO experiments VALUES ('e','EXP','Main','','#000');
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Main','','#000');
              INSERT INTO protocols (id,name,category,active_version,accent,description,origin)
                VALUES ('p','Protocol','Test',1,'#000','','user');
              INSERT INTO protocol_versions (protocol_id,version_number,schema_json,origin,created_at)

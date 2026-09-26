@@ -992,7 +992,7 @@ mod tests {
     fn seed_record_snapshot(connection: &Connection, protocol_id: &str, snapshot: &Value) {
         connection
             .execute_batch(
-                "INSERT INTO experiments VALUES ('e','EXP','Experiment','','#000');
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP','Experiment','','#000');
                  INSERT INTO tasks (id,experiment_id,title,start_time,end_time,status,created_at,updated_at)
                    VALUES ('t','e','Task','2026-08-27T09:00:00','2026-08-27T10:00:00','completed','now','now');",
             )

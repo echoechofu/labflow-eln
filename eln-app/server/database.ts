@@ -38,7 +38,7 @@ export function openDatabase(databasePath: string) {
   const db = new Database(databasePath);
   db.pragma("foreign_keys = ON");
   db.exec(`
-    CREATE TABLE IF NOT EXISTS experiments (id TEXT PRIMARY KEY, experiment_code TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL, color TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS experiments (id TEXT PRIMARY KEY, experiment_code TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL, color TEXT NOT NULL, hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1)));
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL REFERENCES experiments(id), title TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('planned','in_progress','completed')), record_id TEXT);
     CREATE TABLE IF NOT EXISTS protocols (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, active_version INTEGER NOT NULL, accent TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', origin TEXT NOT NULL DEFAULT 'builtin');
     CREATE TABLE IF NOT EXISTS protocol_versions (protocol_id TEXT NOT NULL REFERENCES protocols(id), version_number INTEGER NOT NULL, schema_json TEXT NOT NULL, origin TEXT NOT NULL DEFAULT 'builtin', created_at TEXT, PRIMARY KEY(protocol_id, version_number));
@@ -61,6 +61,11 @@ export function openDatabase(databasePath: string) {
     );
     if (!columns.has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
   };
+  ensureColumn(
+    "experiments",
+    "hidden",
+    "hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1))",
+  );
   ensureColumn("protocols", "description", "description TEXT NOT NULL DEFAULT ''");
   ensureColumn("protocols", "origin", "origin TEXT NOT NULL DEFAULT 'builtin'");
   ensureColumn(

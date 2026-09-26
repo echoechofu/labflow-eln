@@ -52,6 +52,8 @@ pub struct Experiment {
     pub title: String,
     pub description: String,
     pub color: String,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, rmcp::schemars::JsonSchema, PartialEq, Eq)]
@@ -193,7 +195,7 @@ fn task_from_row(row: &Row<'_>) -> Result<Task, rusqlite::Error> {
 pub fn list_experiments(connection: &Connection) -> Result<Vec<Experiment>, TaskServiceError> {
     let mut statement = connection
         .prepare(
-            "SELECT id,experiment_code,title,description,color FROM experiments ORDER BY experiment_code,title,id",
+            "SELECT id,experiment_code,title,description,color,hidden FROM experiments ORDER BY experiment_code,title,id",
         )
         .map_err(persistence)?;
     let result = statement
@@ -204,6 +206,7 @@ pub fn list_experiments(connection: &Connection) -> Result<Vec<Experiment>, Task
                 title: row.get(2)?,
                 description: row.get(3)?,
                 color: row.get(4)?,
+                hidden: row.get(5)?,
             })
         })
         .map_err(persistence)?
@@ -464,13 +467,13 @@ mod tests {
         crate::apply_schema(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('e','EXP100','Main','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('e','EXP100','Main','','#000')",
                 [],
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('other','EXP101','Other','','#111')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('other','EXP101','Other','','#111')",
                 [],
             )
             .unwrap();

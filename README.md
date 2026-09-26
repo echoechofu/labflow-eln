@@ -28,8 +28,7 @@ LabFlow is a local-first laboratory experiment management system and electronic 
 - **Electronic lab records**：记录本次实验的真实操作、偏差和观察结果，并在正文中插入实验图片或附加任意类型原始文件。
 - **Sample tracking and lineage**：保存输入、输出、消耗、派生、条件分组和孔板位置，支持追踪 Sample 来源。
 - **Local data ownership**：SQLite 数据库、图片原件和预览均保存在用户本机，可导出完整工作区备份。
-- **macOS and Windows**：提供 Apple Silicon macOS 与 Windows 10/11 x64 桌面安装包；当前 macOS 为 0.1.6，Windows 维持 0.1.5。
-- **Agent-ready**：Desktop UI 与 MCP Agent Interface 复用同一套 Rust domain/service、validation 和 transaction。
+- **macOS and Windows**：提供 Apple Silicon macOS 与 Windows 10/11 x64 桌面安装包。本次仅将 macOS 更新到 0.1.7，并加入从公开 GitHub Release 检查、确认下载和重启安装；Windows 暂时维持 0.1.5。
 
 ## Core workflows
 
@@ -80,12 +79,12 @@ Agent 不直接访问 SQLite；MCP 只是 adapter。当前 Agent Interface 已�
 
 公开下载仓库提供安装包、SHA-256 文件和首次启动说明，不包含源码：
 
-- [Latest macOS release (0.1.6)](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.6)
+- [Latest macOS release (0.1.7)](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7)
 - [Latest Windows release (0.1.5, not updated in this release)](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.5)
 - [Public installation guide](https://github.com/echoechofu/labflow-releases#readme)
 - [Release changelog](https://github.com/echoechofu/labflow-releases/blob/main/CHANGELOG.md)
 
-当前 MVP 尚未经过 Apple Developer ID 公证或 Windows Authenticode 签名。请按照公开安装说明处理 macOS Gatekeeper 或 Windows SmartScreen 提示。
+当前 MVP 尚未经过 Apple Developer ID 公证或 Windows Authenticode 签名。Updater 签名只验证更新文件来源，不替代平台代码签名；请按照公开安装说明处理 macOS Gatekeeper 或 Windows SmartScreen 提示。发布维护流程见 [GitHub 公开发布与应用内更新](docs/setup/github-updater-release.md)。
 
 ## Development
 

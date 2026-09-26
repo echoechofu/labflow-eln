@@ -1223,7 +1223,7 @@ mod tests {
         crate::ensure_builtin_protocols(&connection).unwrap();
         connection
             .execute(
-                "INSERT INTO experiments VALUES ('exp','EXP900','Cell workflow','','#000')",
+                "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('exp','EXP900','Cell workflow','','#000')",
                 [],
             )
             .unwrap();
@@ -1611,7 +1611,7 @@ mod tests {
     fn cross_experiment_input_rolls_back() {
         let (mut db, path) = database();
         db.execute(
-            "INSERT INTO experiments VALUES ('other','EXP901','Other','','#000')",
+            "INSERT INTO experiments (id,experiment_code,title,description,color) VALUES ('other','EXP901','Other','','#000')",
             [],
         )
         .unwrap();

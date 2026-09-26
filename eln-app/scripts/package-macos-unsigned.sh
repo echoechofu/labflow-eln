@@ -37,10 +37,12 @@ fi
 
 mkdir -p "$output_dir"
 
-# Tauri creates the app bundle but, without a Developer ID identity, does not
-# seal the bundle resources. Sign the complete bundle ad-hoc so Gatekeeper sees
-# a structurally valid App rather than reporting it as damaged.
-codesign --force --deep --sign - "$app_path"
+# The updater build signs with the ad-hoc identity before creating its archive.
+# Keep the downloadable ZIP/DMG byte-for-byte aligned with that app whenever
+# possible, while retaining a fallback for a manually built unsigned bundle.
+if ! codesign --verify --deep --strict "$app_path" >/dev/null 2>&1; then
+  codesign --force --deep --sign - "$app_path"
+fi
 codesign --verify --deep --strict --verbose=2 "$app_path"
 
 ditto "$app_path" "$stage_dir/LabFlow.app"

@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Default LabFlow desktop capability",
   "windows": ["main"],
-  "permissions": ["core:default", "core:webview:allow-print", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "core:webview:allow-print",
+    "dialog:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }
