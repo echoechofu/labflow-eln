@@ -1,94 +1,125 @@
-# LabFlow — Local-first Electronic Lab Notebook (ELN)
+# LabFlow ELN for Biomedical Wet Labs
 
 <p align="center">
-  <img src="eln-app/src/assets/hero.png" alt="LabFlow local-first electronic lab notebook logo" width="220" />
+  <img src="eln-app/src/assets/hero.png" alt="LabFlow ELN logo" width="180" />
 </p>
 
 <p align="center">
-  <strong>面向生物医学湿实验的本地优先电子实验记录本与实验管理软件</strong><br />
-  A private, offline-first ELN for biomedical wet labs on macOS and Windows.
+  <strong>Plan experiments, reuse protocols, preserve what actually happened, and keep samples and files connected.</strong><br />
+  A private, local-first electronic lab notebook and experiment manager for biomedical wet-lab work.
 </p>
 
 <p align="center">
-  <a href="https://github.com/echoechofu/labflow-releases/releases/latest">下载最新版 / Download</a>
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/echoechofu/labflow-releases/releases/latest">Download LabFlow</a>
   ·
-  <a href="docs/product/user-guide.md">用户手册</a>
+  <a href="docs/product/user-guide.md">User guide</a>
   ·
   <a href="docs/architecture/overview.md">Architecture</a>
 </p>
 
-LabFlow 将实验日历、Protocol、实验 Record、Sample 输入输出关系、实验图片和 PDF 导出放进一个本地桌面应用。它适合需要安排细胞实验、复用实验方法、记录实际操作并追踪样本来源的研究人员、研究生和小型科研团队。
+LabFlow connects the parts of an experiment that are often split across a calendar, Word documents, spreadsheets, and folders:
 
-LabFlow is a local-first laboratory experiment management system and electronic lab notebook for biomedical research. It combines experiment planning, reusable protocols, structured records, sample tracking, image attachments and PDF export without requiring a cloud account.
+```text
+Scheduled Task → Versioned Protocol → Actual Record → Samples, images, and original files
+```
 
-## Why LabFlow?
+It is designed for researchers, students, and small biomedical teams who want a lightweight electronic laboratory notebook (ELN) without setting up a cloud account or a laboratory-wide LIMS.
 
-- **实验计划 / Experiment planning**：用周日历安排和调整实验 Task，表达实验之间的前后依赖。
-- **Protocol management**：保存内置或自建实验方法；每次执行都冻结版本快照，历史 Record 不会被后续模板修改。
-- **Electronic lab records**：记录本次实验的真实操作、偏差和观察结果，并在正文中插入实验图片或附加任意类型原始文件。
-- **Sample tracking and lineage**：保存输入、输出、消耗、派生、条件分组和孔板位置，支持追踪 Sample 来源。
-- **Local data ownership**：SQLite 数据库、图片原件和预览均保存在用户本机，可导出完整工作区备份。
-- **macOS and Windows**：提供 Apple Silicon macOS 与 Windows 10/11 x64 桌面安装包。本次仅将 macOS 更新到 0.1.7，并加入从公开 GitHub Release 检查、确认下载和重启安装；Windows 暂时维持 0.1.5。
+## What makes LabFlow useful
+
+### Plan and record in one workflow
+
+Schedule wet-lab Tasks in a weekly calendar, organize them under an Experiment, and connect dependent steps. A Task leads into its execution Record, so the plan and the evidence of what happened stay together.
+
+### Reuse a method without rewriting history
+
+Create built-in or custom Protocols and reuse them across experiments. LabFlow freezes a version snapshot when a Record is created. Later Protocol edits do not change historical Records, while each run can preserve its actual parameters, deviations, observations, inputs, and outputs.
+
+### Keep experiment data connected
+
+Record sample inputs, generated outputs, consumption, derivation, treatment groups, containers, and plate positions. Insert experimental images into the Record body and attach original files of any type. The SQLite database and attachment files remain in the same local workspace and can be exported as a complete backup.
+
+LabFlow starts with practical biomedical Protocols, so a researcher can begin with a real experiment instead of configuring an entire lab system first.
+
+## Product tour
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/calendar.jpg" alt="LabFlow weekly experiment calendar with scheduled wet-lab tasks" /></td>
+    <td width="50%"><img src="docs/assets/screenshots/experiment-network.jpg" alt="LabFlow experiment task dependency network" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Weekly planning</strong><br />Schedule Tasks and keep multi-day experiments visible.</td>
+    <td align="center"><strong>Experiment context</strong><br />See how saved Tasks depend on one another.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/protocols.jpg" alt="LabFlow reusable biomedical protocol library" /></td>
+    <td width="50%"><img src="docs/assets/screenshots/record-detail.jpg" alt="LabFlow experimental record with sample output and actual procedure" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Reusable Protocols</strong><br />Maintain methods with explicit versions.</td>
+    <td align="center"><strong>Actual Records</strong><br />Preserve the procedure, observations, samples, and files from each run.</td>
+  </tr>
+</table>
 
 ## Core workflows
 
 | Workflow | What LabFlow supports |
 | --- | --- |
-| Experiment calendar | 创建、编辑、关联和完成实验 Task；按周查看实验安排 |
-| Protocol builder | 定义原 Sample 沿用、1→1、1→多或1→0；输出类型与具体信息在 Record 中逐行登记 |
-| Record | 从 Protocol 创建带版本快照的实验记录，编辑正文并插入实验图片 |
-| Sample flow | 面向细胞、动物和微生物基础实验的材料类型目录，并支持自定义类型 |
-| Containers | 孔板、培养皿和孔位作为容器/位置信息；旧 PLATE、DISH、WELL 数据继续兼容 |
-| Terminal assays | qPCR、ELISA、CCK-8 的 Plate Mapping 与 Raw Data 保存骨架 |
-| Export and backup | 系统打印、低内存 PDF、低内存 PDF＋全部附件 ZIP，以及完整工作区备份 |
+| Experiment scheduling | Create, edit, relate, and complete Tasks in a 24-hour weekly calendar |
+| Experiment context | Group Tasks under an Experiment, inspect their dependency graph, and hide inactive Experiments from planning views |
+| Protocol management | Use built-in methods or create custom Protocols with version history and Record snapshots |
+| Experimental Records | Capture the procedure actually performed, deviations, observations, images, and arbitrary file attachments |
+| Sample tracking | Register inputs, outputs, consumption, derivation, conditions, containers, and plate positions |
+| Terminal assays | Store Plate Mapping and Raw Data structures for qPCR, ELISA, and CCK-8 |
+| Export and backup | Print Records, create low-memory PDFs, export PDFs with original attachments, and back up the complete workspace |
 
-## Built-in biomedical protocols
+## Built-in biomedical Protocols
 
-当前内置流程包括细胞复苏、细胞传代、细胞铺板、细胞加刺激、RNA Extraction、Reverse Transcription、SYBR Green qPCR、Western Blot、培养上清收集、ELISA 和 CCK-8。
+The current catalog includes:
 
-其中“细胞加刺激”支持同一类型的多个 CELL、PLATE、DISH 或 WELL 输入：CELL/DISH/WELL 以原 Sample 身份登记为输出，PLATE 可按刺激条件生成带 lineage 的 WELL。
+- Cell thawing, passaging, plating, and treatment
+- RNA extraction and reverse transcription
+- SYBR Green qPCR
+- Western blot
+- Culture-supernatant collection
+- ELISA and CCK-8
 
-## Local-first data and privacy
+Custom Protocols can describe passthrough samples, one-to-one, one-to-many, and one-to-zero transformations. Each Record captures the concrete outputs and sample lineage produced during that run.
 
-正式桌面版不依赖 Express 或 localhost HTTP API。Canonical 用户数据与源码目录隔离：
+## Local-first data ownership
+
+The packaged desktop app does not require an Express server, localhost HTTP API, cloud account, or always-on internet connection. Canonical user data is stored outside the application bundle and source tree:
 
 ```text
 macOS:   ~/Library/Application Support/LabFlow/
 Windows: %APPDATA%\LabFlow\
 ```
 
-目录内包含 `labflow.sqlite` 和 `files/`。图片原件保存在 `files/`，SQLite 只保存附件元数据和相对路径。请使用应用内“数据管理”导出或恢复工作区，不要直接修改数据库文件。
+The workspace contains `labflow.sqlite` and `files/`. Original attachments remain in `files/`; SQLite stores their metadata and relative paths. Use **Data Management** inside LabFlow to export or restore a complete `.labflow-backup` workspace.
 
-## Desktop and AI Agent architecture
+## Download and platform status
 
-```text
-Desktop UI ── Tauri ──┐
-                      ↓
-               LabFlow Domain/Service
-                      ↓
-             validation + transaction
-                      ↓
-                    SQLite
-                      ↑
-Codex / Agent ─ MCP ──┘
-```
-
-Agent 不直接访问 SQLite；MCP 只是 adapter。当前 Agent Interface 已覆盖 Task、Experiment、Protocol 和 Record 的部分操作，所有写入均委托给桌面端共用的 service。详细约束见 [Agent 安装说明](docs/setup/labflow-agent-install.md)和 [架构概览](docs/architecture/overview.md)。
-
-## Download LabFlow
-
-公开下载仓库提供安装包、SHA-256 文件和首次启动说明，不包含源码：
-
-- [Latest macOS release (0.1.7)](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7)
-- [Latest Windows release (0.1.5, not updated in this release)](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.5)
+- [macOS 0.1.7 for Apple Silicon](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7) — macOS 12 or later. This release introduces signed update manifests, startup update checks, user-confirmed download, and install-and-restart.
+- [Windows 0.1.5 for x64](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.5) — Windows 10/11. Windows was not updated in the 0.1.7 release and does not yet include in-app updates.
 - [Public installation guide](https://github.com/echoechofu/labflow-releases#readme)
 - [Release changelog](https://github.com/echoechofu/labflow-releases/blob/main/CHANGELOG.md)
 
-当前 MVP 尚未经过 Apple Developer ID 公证或 Windows Authenticode 签名。Updater 签名只验证更新文件来源，不替代平台代码签名；请按照公开安装说明处理 macOS Gatekeeper 或 Windows SmartScreen 提示。发布维护流程见 [GitHub 公开发布与应用内更新](docs/setup/github-updater-release.md)。
+The current MVP uses ad-hoc signing on macOS and is not notarized with Apple Developer ID. Windows packages are not Authenticode-signed. Follow the public installation guide if Gatekeeper or SmartScreen asks for confirmation. Updater signatures verify the origin and integrity of update artifacts; they do not replace operating-system code signing.
+
+## Optional MCP integration
+
+LabFlow also exposes part of its Task, Experiment, Protocol, and Record capabilities to local AI clients through a bundled Model Context Protocol (MCP) server. The desktop UI and MCP adapter call the same domain services and validation rules; an Agent does not receive direct SQLite access.
+
+This integration is optional. LabFlow remains a complete local desktop workflow without an Agent. See the [MCP user guide](docs/product/mcp-user-guide.md) and [architecture overview](docs/architecture/overview.md) for details.
 
 ## Development
 
-Requirements: Node.js 24、Rust 1.98、macOS 上的 Xcode Command Line Tools；Windows 安装包由 GitHub Actions 的 Windows runner 原生构建。
+Requirements: Node.js 24, Rust 1.98, and Xcode Command Line Tools on macOS. Windows installers are built on a native GitHub Actions Windows runner.
 
 ```bash
 cd eln-app
@@ -96,7 +127,7 @@ npm install
 npm run tauri:dev
 ```
 
-工程检查：
+Project checks:
 
 ```bash
 cd eln-app
@@ -106,14 +137,13 @@ npm run build:web
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-更完整的构建、数据隔离和发布说明见 [eln-app/README.md](eln-app/README.md)。
+See [eln-app/README.md](eln-app/README.md) for packaging and data-isolation details.
 
 ## Documentation
 
-- [产品范围](docs/product/scope.md)
-- [用户手册](docs/product/user-guide.md)
-- [核心对象、Record 与 Sample Flow 使用指南](docs/product/core-objects-and-sample-flow-guide.md)
-- [MCP 安装与使用指南](docs/product/mcp-user-guide.md)
+- [Product scope](docs/product/scope.md)
+- [User guide](docs/product/user-guide.md)
+- [Core objects, Records, and Sample Flow](docs/product/core-objects-and-sample-flow-guide.md)
 - [Protocol domain](docs/domain/protocol.md)
 - [Sample lineage](docs/domain/sample-lineage.md)
 - [Architecture overview](docs/architecture/overview.md)
@@ -122,8 +152,8 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## Project status
 
-LabFlow 当前处于 MVP 测试阶段，重点服务生物医学 wet-lab 的个人和小团队工作流。当前不包含云同步、多人实时协作、任意 Word/PDF 自动转换为可执行 Protocol，或基于实验数据的自动科学结论。
+LabFlow is an MVP for individual researchers and small biomedical wet-lab teams. The current interface is primarily Chinese. It does not currently provide cloud sync, real-time multi-user collaboration, automatic conversion of arbitrary Word/PDF files into executable Protocols, or automated scientific conclusions from experimental data.
 
 ## License
 
-LabFlow 使用 [PolyForm Noncommercial License 1.0.0](LICENSE)。允许个人、教学、学术研究和其他非商业用途；商业使用需要另行授权。
+LabFlow is distributed under the [PolyForm Noncommercial License 1.0.0](LICENSE). Personal use, education, academic research, and other noncommercial uses are permitted. Commercial use requires separate authorization.

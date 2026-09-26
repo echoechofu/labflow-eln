@@ -36,7 +36,7 @@ React UI
 
 ## Documentation
 
-长期维护文档位于 [`../docs/`](../docs/)，涵盖当前产品边界、核心工作流、领域模型、Protocol 与 Sample lineage、架构/数据库说明，以及已接受的架构决策（ADR）。测试用户可直接阅读 [LabFlow 0.1.0 用户手册](../docs/product/user-guide.md)。
+长期维护文档位于 [`../docs/`](../docs/)，涵盖当前产品边界、核心工作流、领域模型、Protocol 与 Sample lineage、架构/数据库说明，以及已接受的架构决策（ADR）。测试用户可直接阅读 [LabFlow 用户手册](../docs/product/user-guide.md)。
 
 ## 用户数据与源码隔离
 
@@ -92,15 +92,15 @@ npm run tauri:build:windows
 
 ## macOS 下载与安装
 
-从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.6) 下载 `LabFlow-0.1.6-Apple-Silicon.zip` 或 DMG，安装后将 `LabFlow.app` 放入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本；0.1.6 内置 `labflow-mcp`，可按 [MCP 安装与使用指南](../docs/product/mcp-user-guide.md)接入 Codex 等本机 Agent。
+从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7) 下载 `LabFlow-0.1.7-Apple-Silicon.zip` 或 DMG，安装后将 `LabFlow.app` 放入“应用程序”文件夹即可。本测试版仅支持 Apple Silicon（M1/M2/M3/M4 等）和 macOS 12 或更高版本；0.1.7 内置 `labflow-mcp`，可按 [MCP 安装与使用指南](../docs/product/mcp-user-guide.md)接入 Codex 等本机 Agent。
 
-如需验证下载完整性，可同时下载 `SHA256SUMS.txt`，将它与 ZIP 放在同一目录，先在终端执行 `shasum -a 256 LabFlow-0.1.6-Apple-Silicon.zip`，再用 `cat SHA256SUMS.txt` 查看官方值。校验是可选步骤；若执行校验而 Hash 不一致，请不要安装并重新下载。
+如需验证下载完整性，可同时下载 `SHA256SUMS.txt`，将它与 ZIP 放在同一目录，先在终端执行 `shasum -a 256 LabFlow-0.1.7-Apple-Silicon.zip`，再用 `cat SHA256SUMS.txt` 查看官方值。校验是可选步骤；若执行校验而 Hash 不一致，请不要安装并重新下载。
 
 当前发布包尚未经过 Apple Developer ID 签名与公证。首次尝试打开后若被 macOS 拦截，请打开“系统设置”→“隐私与安全性”，在“安全性”区域找到 `LabFlow was blocked to protect your Mac`，点击“仍要打开”（Open Anyway），再在确认窗口中点击“打开”。不要删除或移动 `~/Library/Application Support/LabFlow/`，其中保存用户的数据库和附件。
 
 ## Windows 下载与安装
 
-Windows 10/11 x64 测试版提供 NSIS `Setup.exe` 和 `.msi`，普通用户优先选择 `Setup.exe`。**本次 0.1.6 发布未更新 Windows 安装包，Windows 用户继续使用 0.1.5。** 当前 MVP 明确为未签名发布；下载后应先核对 Release 中的 SHA-256，再按 [Windows 安装与 SmartScreen 说明](../docs/product/windows-install.md)安装。
+Windows 10/11 x64 测试版提供 NSIS `Setup.exe` 和 `.msi`，普通用户优先选择 `Setup.exe`。**本次 0.1.7 发布未更新 Windows 安装包，Windows 用户继续使用 0.1.5。** 当前 MVP 明确为未签名发布；下载后应先核对 Release 中的 SHA-256，再按 [Windows 安装与 SmartScreen 说明](../docs/product/windows-install.md)安装。
 
 如果学校、医院或企业策略禁止运行未签名程序，请遵守组织策略并联系 IT 管理员，不要尝试绕过管理控制。
 
