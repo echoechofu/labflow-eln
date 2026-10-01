@@ -1,19 +1,19 @@
 # LabFlow 用户手册
 
-本手册适用于 **LabFlow 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。本次仅将 macOS 更新到 **0.1.7**，并加入从公开 GitHub Release 检查更新；Windows 暂时维持 **0.1.5**。关于 Project、Task、Protocol、Record、Sample 的完整关系和 Sample Flow 示例，请阅读[核心对象、Record 与 Sample Flow 使用指南](core-objects-and-sample-flow-guide.md)；需要连接 Codex、ChatGPT 桌面应用或其他 Agent 时，请阅读 [MCP 安装与使用指南](mcp-user-guide.md)。
+本手册适用于 **LabFlow 0.1.7 测试版**，重点说明日常使用、自建 Protocol，以及实验已经进行到中途时如何开始使用 LabFlow。macOS 与 Windows 均已更新到 0.1.7，并支持从公开 GitHub Release 检查后续更新。关于 Project、Task、Protocol、Record、Sample 的完整关系和 Sample Flow 示例，请阅读[核心对象、Record 与 Sample Flow 使用指南](core-objects-and-sample-flow-guide.md)；需要连接 Codex、ChatGPT 桌面应用或其他 Agent 时，请阅读 [MCP 安装与使用指南](mcp-user-guide.md)。
 
 ## 1. 安装与数据位置
 
 从公开的 [LabFlow Downloads](https://github.com/echoechofu/labflow-releases/releases/latest) 下载与系统匹配的最新版文件：
 
 - Apple Silicon macOS 12+：下载包含 `Apple-Silicon` 的 ZIP 或 DMG；
-- Windows 10/11 x64：本次未更新，继续下载 0.1.5 中包含 `Windows-x64-Setup` 的 EXE。
+- Windows 10/11 x64：下载 0.1.7 中包含 `Windows-x64-Setup` 的 EXE。
 
 如希望确认安装包与 Release 中发布的文件完全一致，可以同时下载 `SHA256SUMS.txt`：对 ZIP 或 DMG 执行 `shasum -a 256 <文件名>`，再用 `cat SHA256SUMS.txt` 查看官方值。两处 Hash 应完全一致；这是可选的完整性校验，不是安装的强制步骤。当前版本尚未经过 Apple Developer ID 签名和公证；解压并将 `LabFlow.app` 拖入“应用程序”后，先尝试打开一次。若被拦截，请打开“系统设置”→“隐私与安全性”，在“安全性”区域点击 `LabFlow was blocked to protect your Mac` 旁的“仍要打开”（Open Anyway），再在确认窗口中点击“打开”。应用内更新包会经过独立的 updater 签名验证，但这不等于 Apple 公证；系统再次评估应用时仍可能要求手动允许打开。
 
 ### 1.1 应用内更新
 
-macOS 版 LabFlow 启动时会检查公开 GitHub Release。发现更高版本时，系统原生窗口会先询问是否下载；下载完成并验证签名后，会再次询问是否安装并重启。拒绝不会删除数据，也不会在后台强制安装，下次启动仍可再次选择。0.1.6 及更早版本没有更新组件，需要先手动安装一次 macOS 0.1.7；之后才能使用应用内更新。Windows 0.1.5 暂不包含该功能。
+macOS 和 Windows 0.1.7 启动时会检查公开 GitHub Release。发现更高版本时，系统原生窗口会先询问是否下载；下载完成并验证签名后，会再次询问是否安装并重启。拒绝不会删除数据，也不会在后台强制安装，下次启动仍可再次选择。macOS 0.1.6 及更早版本、Windows 0.1.5 及更早版本没有更新组件，需要先手动安装一次 0.1.7；之后才能使用应用内更新。
 
 Windows MVP 当前没有 Authenticode 签名。可按需核对 SHA-256，然后按 [Windows 安装与 SmartScreen 说明](windows-install.md)安装。
 

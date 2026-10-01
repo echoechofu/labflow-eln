@@ -111,7 +111,7 @@ Windows: %APPDATA%\LabFlow\
 ## 下载与平台状态
 
 - [macOS 0.1.7 Apple Silicon 版](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7)：支持 macOS 12 及以上系统。本版本加入更新签名、启动时检查更新、用户确认下载，以及安装并重启。
-- [Windows 0.1.5 x64 版](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.5)：支持 Windows 10/11。本次 0.1.7 没有更新 Windows 版，Windows 暂不包含应用内更新。
+- [Windows 0.1.7 x64 版](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7)：支持 Windows 10/11，提供 Setup.exe 安装包；本版本内置 MCP Server，并支持后续版本的签名应用内更新。
 - [公开安装说明](https://github.com/echoechofu/labflow-releases#readme)
 - [版本更新记录](https://github.com/echoechofu/labflow-releases/blob/main/CHANGELOG.md)
 

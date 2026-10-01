@@ -111,7 +111,7 @@ The workspace contains `labflow.sqlite` and `files/`. Original attachments remai
 ## Download and platform status
 
 - [macOS 0.1.7 for Apple Silicon](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7) — macOS 12 or later. This release introduces signed update manifests, startup update checks, user-confirmed download, and install-and-restart.
-- [Windows 0.1.5 for x64](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.5) — Windows 10/11. Windows was not updated in the 0.1.7 release and does not yet include in-app updates.
+- [Windows 0.1.7 for x64](https://github.com/echoechofu/labflow-releases/releases/tag/v0.1.7) — Windows 10/11, distributed as a Setup.exe installer. This build includes the bundled MCP server and signed in-app update support for later releases.
 - [Public installation guide](https://github.com/echoechofu/labflow-releases#readme)
 - [Release changelog](https://github.com/echoechofu/labflow-releases/blob/main/CHANGELOG.md)
 

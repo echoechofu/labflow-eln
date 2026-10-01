@@ -18,7 +18,7 @@ Codex / ChatGPT Desktop / WorkBuddy
 
 从 **LabFlow 0.1.6 macOS** 起，官方 macOS App 已内置 `labflow-mcp`，普通用户安装 App 后即可注册到本机 Agent。无需源码、无需单独下载 MCP 二进制，也不需要 LabFlow 账号或 API Key。
 
-本次 **没有更新 Windows 安装包**：公开 Windows 版本仍为 0.1.5，尚未内置 MCP sidecar。Windows 用户如需测试 MCP，仍需取得源码访问权限并在 Windows 本机构建；不要从非官方来源下载 `labflow-mcp.exe`。
+LabFlow 0.1.7 的 macOS 与 Windows 官方安装包均内置 MCP sidecar。普通用户安装 App 后即可注册到本机 Agent，无需取得源码或单独下载 `labflow-mcp`；不要从非官方来源下载 MCP 二进制。
 
 桌面版和 MCP 最好使用相同版本。版本不一致时，工具参数、验证规则或数据库 schema 可能不匹配。
 

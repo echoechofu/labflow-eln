@@ -100,7 +100,7 @@ npm run tauri:build:windows
 
 ## Windows 下载与安装
 
-Windows 10/11 x64 测试版提供 NSIS `Setup.exe` 和 `.msi`，普通用户优先选择 `Setup.exe`。**本次 0.1.7 发布未更新 Windows 安装包，Windows 用户继续使用 0.1.5。** 当前 MVP 明确为未签名发布；下载后应先核对 Release 中的 SHA-256，再按 [Windows 安装与 SmartScreen 说明](../docs/product/windows-install.md)安装。
+Windows 10/11 x64 0.1.7 测试版提供 NSIS `Setup.exe`。本版本内置 `labflow-mcp` 和 updater；Windows 0.1.5 及更早版本需先手动安装一次 0.1.7，之后才能接收应用内更新。当前 MVP 明确为未签名发布；下载后应先核对 Release 中的 SHA-256，再按 [Windows 安装与 SmartScreen 说明](../docs/product/windows-install.md)安装。
 
 如果学校、医院或企业策略禁止运行未签名程序，请遵守组织策略并联系 IT 管理员，不要尝试绕过管理控制。
 

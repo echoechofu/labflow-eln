@@ -1,6 +1,6 @@
 # GitHub 公开发布与应用内更新
 
-LabFlow macOS 0.1.7 起使用 Tauri v2 updater，从公开仓库 `echoechofu/labflow-releases` 的最新 GitHub Release 读取 `latest.json`。应用启动时静默检查；发现更高版本后先用系统原生窗口询问是否下载，下载完成并通过 updater 签名校验后，再询问是否安装并重启。本次只发布 macOS 0.1.7，Windows 暂时维持 0.1.5，且不包含应用内更新。
+LabFlow 0.1.7 的 macOS 与 Windows 版均使用 Tauri v2 updater，从公开仓库 `echoechofu/labflow-releases` 的最新 GitHub Release 读取 `latest.json`。应用启动时静默检查；发现更高版本后先用系统原生窗口询问是否下载，下载完成并通过 updater 签名校验后，再询问是否安装并重启。
 
 ## 两种签名互不替代
 
@@ -33,18 +33,18 @@ gh secret set LABFLOW_RELEASES_TOKEN \
 
 1. 同步修改 `eln-app/package.json`、`eln-app/src-tauri/Cargo.toml` 和 `eln-app/src-tauri/tauri.conf.json` 中的版本。
 2. 将代码推送到私有源码仓库。
-3. 在 Actions 中运行 **Build and publish macOS release**。
+3. 在 Actions 中运行 **Build and publish macOS release** 构建 macOS，运行 **Build and publish Windows release** 构建 Windows。
 4. `release_tag` 必须等于 `v` 加应用版本，例如 `v0.1.7`。
-5. 先保持 `publish=false`，下载并验收 Actions 产生的 macOS artifact。
+5. 先保持 `publish=false`，下载并验收 Actions 产生的对应平台 artifact。
 6. 验收通过后，用相同 commit 和 tag 再运行一次并设置 `publish=true`。
 
-本次工作流只原生构建 Apple Silicon macOS，验证 ad-hoc 签名，生成 updater 签名、SHA-256 文件和只包含 `darwin-aarch64` 的 `latest.json`，然后上传到公开下载仓库。以后发布带 updater 的 Windows 新版时，可为 manifest 生成脚本同时提供 Windows 更新包及签名；本次不会生成或上传 Windows 0.1.7。
+macOS 工作流在 Apple Silicon runner 上构建 ZIP、DMG 和 updater archive，并验证 ad-hoc 签名。Windows 工作流在 Windows runner 上构建 NSIS Setup.exe 和 updater 签名，并验证安装包没有 Authenticode 签名。两边分别生成 SHA-256 文件；公开 Release 的 `latest.json` 同时保留 `darwin-aarch64` 与 `windows-x86_64`。
 
 ## 首次启用和测试
 
-macOS 0.1.6 及更早版本没有 updater，无法自行发现 0.1.7。现有用户需要手动安装一次 macOS 0.1.7；从 0.1.7 升级到更高版本时才会出现应用内提醒。
+macOS 0.1.6 及更早版本、Windows 0.1.5 及更早版本没有 updater，无法自行发现 0.1.7。现有用户需要手动安装一次对应平台的 0.1.7；从 0.1.7 升级到更高版本时才会出现应用内提醒。
 
-macOS 端到端测试必须发布一个版本号更高的测试 Release，例如在安装 0.1.7 后发布 0.1.8。检查以下过程：
+端到端测试必须发布一个版本号更高的测试 Release，例如在安装 0.1.7 后发布 0.1.8。macOS 与 Windows 分别检查以下过程：
 
 1. 启动 0.1.7 后出现系统更新确认窗口；
 2. 拒绝时不下载，下次启动仍会提醒；

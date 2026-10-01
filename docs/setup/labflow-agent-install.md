@@ -1,6 +1,6 @@
 # Installing the LabFlow Agent Interface
 
-> 普通用户请先阅读中文的 [LabFlow MCP 安装与使用指南](../product/mcp-user-guide.md)。LabFlow 0.1.6 的 macOS App 已内置 MCP sidecar；本页主要面向拥有源码访问权限、需要手动构建、调试 MCP，或在仍为 0.1.5 的 Windows 测试版中使用 MCP 的开发者与测试者。
+> 普通用户请先阅读中文的 [LabFlow MCP 安装与使用指南](../product/mcp-user-guide.md)。LabFlow 0.1.7 的 macOS 与 Windows App 均已内置 MCP sidecar；本页主要面向拥有源码访问权限、需要手动构建或调试 MCP 的开发者与测试者。
 
 This guide is for people who want to drive the LabFlow workspace from a
 local Agent (WorkBuddy, Codex CLI, or any MCP-compatible client) without
