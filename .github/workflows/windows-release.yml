@@ -1,0 +1,175 @@
+name: Build and publish Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing public labflow-releases tag; must match the app version
+        required: true
+        default: v0.1.7
+        type: string
+      release_notes:
+        description: Notes shown in the in-app update prompt
+        required: true
+        default: LabFlow 0.1.7 现已支持 Windows 10/11 x64。
+        type: string
+      publish:
+        description: Add Windows files and the updated latest.json to the public release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-x64:
+    name: Windows 10/11 x64 installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: eln-app
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.LABFLOW_UPDATER_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+
+    steps:
+      - name: Check out the private source repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: eln-app/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+
+      - name: Verify release version
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ($env:RELEASE_TAG -ne "v$version") {
+            throw "release_tag must be v$version"
+          }
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bootstrap external binary path for Cargo tests
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
+          [IO.File]::WriteAllBytes(
+            (Join-Path $PWD "src-tauri/binaries/labflow-mcp-x86_64-pc-windows-msvc.exe"),
+            [byte[]]@()
+          )
+
+      - name: Run application checks
+        run: |
+          npm run lint
+          npm test
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build unsigned installers and signed updater artifacts
+        run: npm run tauri:build:windows
+
+      - name: Stage, verify, and checksum installers
+        run: |
+          $version = node -p "require('./package.json').version"
+          $output = Join-Path $PWD "release/windows-x64"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          $nsis = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
+          $msi = Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1
+          if (-not $nsis -or -not $msi) {
+            throw "Tauri did not produce both NSIS and MSI installers."
+          }
+          if (-not (Test-Path "$($nsis.FullName).sig")) {
+            throw "Tauri did not produce the NSIS updater signature."
+          }
+          if (-not (Test-Path "$($msi.FullName).sig")) {
+            throw "Tauri did not produce the MSI updater signature."
+          }
+
+          $setupName = "LabFlow-$version-Windows-x64-Setup.exe"
+          $msiName = "LabFlow-$version-Windows-x64.msi"
+          Copy-Item $nsis.FullName (Join-Path $output $setupName)
+          Copy-Item "$($nsis.FullName).sig" (Join-Path $output "$setupName.sig")
+          Copy-Item $msi.FullName (Join-Path $output $msiName)
+          Copy-Item "$($msi.FullName).sig" (Join-Path $output "$msiName.sig")
+
+          $installers = Get-ChildItem $output -File | Where-Object { $_.Extension -in '.exe', '.msi' }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature $installer.FullName
+            if ($signature.Status -ne 'NotSigned') {
+              throw "Expected an unsigned Windows artifact, but $($installer.Name) reports $($signature.Status)."
+            }
+          }
+
+          $checksumPath = Join-Path $output "SHA256SUMS-Windows-x64.txt"
+          $checksumLines = foreach ($installer in ($installers | Sort-Object Name)) {
+            $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+            "$hash  $($installer.Name)"
+          }
+          Set-Content -Path $checksumPath -Value $checksumLines -Encoding utf8NoBOM
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabFlow-${{ inputs.release_tag }}-Windows-x64
+          path: eln-app/release/windows-x64/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Add Windows files to the public release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ secrets.LABFLOW_RELEASES_TOKEN }}
+          RELEASE_REPOSITORY: echoechofu/labflow-releases
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "LABFLOW_RELEASES_TOKEN is required when publish=true."
+          }
+
+          $version = node -p "require('./package.json').version"
+          $darwinName = "LabFlow-$version-darwin-aarch64.app.tar.gz"
+          $windowsName = "LabFlow-$version-Windows-x64-Setup.exe"
+          $manifestDirectory = Join-Path $PWD "release/updater"
+          New-Item -ItemType Directory -Force -Path $manifestDirectory | Out-Null
+
+          gh release view $env:RELEASE_TAG --repo $env:RELEASE_REPOSITORY | Out-Null
+          gh release download $env:RELEASE_TAG `
+            --repo $env:RELEASE_REPOSITORY `
+            --pattern "$darwinName.sig" `
+            --dir $manifestDirectory `
+            --clobber
+
+          $env:LABFLOW_RELEASE_VERSION = $version
+          $env:LABFLOW_RELEASE_TAG = $env:RELEASE_TAG
+          $env:LABFLOW_RELEASE_REPOSITORY = $env:RELEASE_REPOSITORY
+          $env:LABFLOW_RELEASE_NOTES = $env:RELEASE_NOTES
+          $env:LABFLOW_UPDATE_MANIFEST = Join-Path $manifestDirectory "latest.json"
+          $env:LABFLOW_DARWIN_UPDATE_FILE = $darwinName
+          $env:LABFLOW_DARWIN_SIGNATURE = Join-Path $manifestDirectory "$darwinName.sig"
+          $env:LABFLOW_WINDOWS_UPDATE_FILE = $windowsName
+          $env:LABFLOW_WINDOWS_SIGNATURE = Join-Path $PWD "release/windows-x64/$windowsName.sig"
+          node scripts/create-updater-manifest.mjs
+
+          $assets = @((Get-ChildItem "release/windows-x64" -File).FullName)
+          $assets += $env:LABFLOW_UPDATE_MANIFEST
+          gh release upload $env:RELEASE_TAG $assets `
+            --repo $env:RELEASE_REPOSITORY `
+            --clobber
