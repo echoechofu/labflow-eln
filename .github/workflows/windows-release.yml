@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build-windows-x64:
-    name: Windows 10/11 x64 installers
+    name: Windows 10/11 x64 Setup installer
     runs-on: windows-2022
     timeout-minutes: 60
     defaults:
@@ -54,6 +54,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: eln-app/src-tauri -> target
 
       - name: Verify release version
         run: |
@@ -82,10 +87,13 @@ jobs:
         run: npm test
 
       - name: Run Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --release --manifest-path src-tauri/Cargo.toml
 
-      - name: Build unsigned installers and signed updater artifacts
-        run: npm run tauri:build:windows
+      - name: Prepare MCP sidecar
+        run: npm run prepare:mcp-sidecar
+
+      - name: Build unsigned Setup installer and signed updater artifact
+        run: npx tauri build --bundles nsis
 
       - name: Stage, verify, and checksum installers
         run: |
@@ -94,25 +102,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path $output | Out-Null
 
           $nsis = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
-          $msi = Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1
-          if (-not $nsis -or -not $msi) {
-            throw "Tauri did not produce both NSIS and MSI installers."
+          if (-not $nsis) {
+            throw "Tauri did not produce the NSIS Setup installer."
           }
           if (-not (Test-Path "$($nsis.FullName).sig")) {
             throw "Tauri did not produce the NSIS updater signature."
           }
-          if (-not (Test-Path "$($msi.FullName).sig")) {
-            throw "Tauri did not produce the MSI updater signature."
-          }
-
           $setupName = "LabFlow-$version-Windows-x64-Setup.exe"
-          $msiName = "LabFlow-$version-Windows-x64.msi"
           Copy-Item $nsis.FullName (Join-Path $output $setupName)
           Copy-Item "$($nsis.FullName).sig" (Join-Path $output "$setupName.sig")
-          Copy-Item $msi.FullName (Join-Path $output $msiName)
-          Copy-Item "$($msi.FullName).sig" (Join-Path $output "$msiName.sig")
 
-          $installers = Get-ChildItem $output -File | Where-Object { $_.Extension -in '.exe', '.msi' }
+          $installers = Get-ChildItem $output -File | Where-Object { $_.Extension -eq '.exe' }
           foreach ($installer in $installers) {
             $signature = Get-AuthenticodeSignature $installer.FullName
             if ($signature.Status -ne 'NotSigned') {
