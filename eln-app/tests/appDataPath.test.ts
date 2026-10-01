@@ -16,7 +16,7 @@ test('app startup creates isolated user-data and attachment directories', () => 
   paths.ensureUserDataDirectories()
   assert.equal(existsSync(paths.getAppDataDir()), true)
   assert.equal(existsSync(paths.getAttachmentsDir()), true)
-  assert.equal(paths.getDatabasePath().endsWith('/LabFlow/labflow.sqlite'), true)
+  assert.equal(paths.getDatabasePath().endsWith(join('LabFlow', 'labflow.sqlite')), true)
 })
 
 test('fresh migration creates SQLite outside project source directory', () => {

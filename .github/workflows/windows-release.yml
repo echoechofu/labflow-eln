@@ -29,7 +29,7 @@ concurrency:
 jobs:
   build-windows-x64:
     name: Windows 10/11 x64 installers
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 60
     defaults:
       run:
@@ -75,11 +75,14 @@ jobs:
             [byte[]]@()
           )
 
-      - name: Run application checks
-        run: |
-          npm run lint
-          npm test
-          cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build unsigned installers and signed updater artifacts
         run: npm run tauri:build:windows

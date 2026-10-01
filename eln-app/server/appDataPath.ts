@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 
 export interface AppDataPathProvider {
   getAppDataDir(): string
@@ -21,7 +21,7 @@ export const appDataPaths = (provider: AppDataPathProvider = new NodeAppDataPath
   const getAppDataDir = () => provider.getAppDataDir()
   const getDatabasePath = () => join(getAppDataDir(), 'labflow.sqlite')
   const getAttachmentsDir = () => join(getAppDataDir(), 'files')
-  const getAttachmentRelativePath = (attachmentId: string, filename: string) => join('files', attachmentId, filename)
+  const getAttachmentRelativePath = (attachmentId: string, filename: string) => posix.join('files', attachmentId, filename)
   const ensureUserDataDirectories = () => {
     mkdirSync(getAppDataDir(), { recursive: true })
     mkdirSync(getAttachmentsDir(), { recursive: true })
